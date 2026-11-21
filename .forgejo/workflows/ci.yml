@@ -1,0 +1,35 @@
+name: Pure logic
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: python:3.12-slim-bookworm
+    steps:
+      - name: Install checkout runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git nodejs ca-certificates
+          rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          python - <<'PYTHON'
+          import subprocess
+          import sys
+          import tomllib
+          with open("pyproject.toml", "rb") as config:
+              packages = tomllib.load(config)["dependency-groups"]["dev"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install",
+                                 "--disable-pip-version-check", *packages])
+          PYTHON
+      - name: Lint
+        run: ruff check .
+      - name: Format
+        run: ruff format --check .
+      - name: Pure logic tests
+        run: pytest -q

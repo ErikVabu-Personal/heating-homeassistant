@@ -1,0 +1,11 @@
+{
+  "domain": "central_heating",
+  "name": "Central Heating",
+  "codeowners": ["@ErikVabu-Personal"],
+  "config_flow": false,
+  "documentation": "https://github.com/ErikVabu-Personal/heating-homeassistant",
+  "iot_class": "calculated",
+  "dependencies": ["http", "frontend", "websocket_api"],
+  "after_dependencies": ["mqtt"],
+  "version": "0.1.0"
+}

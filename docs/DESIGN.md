@@ -192,7 +192,9 @@ trailing slash. It's configurable.
 - **IDs:** profile and room IDs are random. Names are for display only.
 
 Times are local wall-clock times (`dt_util`). A daylight-saving change applies blocks by local time: a block at a
-time that doesn't exist that day starts at the next valid minute.
+time that doesn't exist that day starts at the next valid minute. If several starts resolve to the same instant,
+the last block in the day's order wins, including an explicit block at that valid minute. An ambiguous start
+uses its first occurrence.
 
 ### 6.2 Modes
 | Mode | Room target written to TRVs | Boiler |

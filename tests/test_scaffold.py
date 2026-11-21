@@ -1,0 +1,42 @@
+"""Scaffold metadata and the stdlib-only import boundary are part of PR 1."""
+
+import ast
+import importlib
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPONENT = ROOT / "custom_components" / "central_heating"
+
+
+def test_stub_imports_without_home_assistant():
+    importlib.import_module("custom_components.central_heating")
+    assert "homeassistant" not in sys.modules
+
+
+def test_logic_is_stdlib_only():
+    for name in ("demand", "smoothing", "schedule"):
+        tree = ast.parse((COMPONENT / f"{name}.py").read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name.split(".")[0] in sys.stdlib_module_names
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                assert node.module.split(".")[0] in sys.stdlib_module_names
+
+
+def test_scaffold_manifest_and_hacs():
+    manifest = json.loads((COMPONENT / "manifest.json").read_text())
+    assert manifest["domain"] == "central_heating"
+    assert manifest["config_flow"] is False
+    assert manifest["iot_class"] == "calculated"
+    assert set(manifest["dependencies"]) == {"http", "frontend", "websocket_api"}
+    assert manifest["after_dependencies"] == ["mqtt"]
+    assert not manifest.get("requirements")
+    assert json.loads((ROOT / "hacs.json").read_text()) == {
+        "name": "Central Heating",
+        "render_readme": True,
+    }
+    assert (ROOT / ".forgejo" / "workflows" / "ci.yml").is_file()
+    assert not (ROOT / ".github").exists()
