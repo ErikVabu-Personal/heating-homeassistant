@@ -1,0 +1,44 @@
+name: Pure logic
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: python:3.14-slim-bookworm
+    steps:
+      - name: Install checkout runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git curl xz-utils ca-certificates
+          rm -rf /var/lib/apt/lists/*
+          test "$(uname -m)" = x86_64
+          node_archive=node-v20.20.2-linux-x64.tar.xz
+          curl --fail --location --retry 3 --output "/tmp/$node_archive" "https://nodejs.org/dist/v20.20.2/$node_archive"
+          cd /tmp
+          echo "df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d  $node_archive" | sha256sum --check -
+          tar -xJf "$node_archive" -C /usr/local --strip-components=1
+          rm "$node_archive"
+          node --version | grep '^v20[.]'
+          python -c 'import sys; assert sys.version_info >= (3, 14, 2)'
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          python - <<'PYTHON'
+          import subprocess
+          import sys
+          import tomllib
+          with open("pyproject.toml", "rb") as config:
+              packages = tomllib.load(config)["dependency-groups"]["dev"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install",
+                                 "--disable-pip-version-check", *packages])
+          PYTHON
+      - name: Lint
+        run: ruff check .
+      - name: Format
+        run: ruff format --check .
+      - name: Pure logic tests
+        run: pytest -q

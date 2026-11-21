@@ -1,0 +1,8 @@
+"""Shared domain and pure-logic defaults."""
+
+DOMAIN = "central_heating"
+DEFAULT_HYSTERESIS = 0.3
+DEFAULT_FROST_TEMPERATURE = 16.0
+SMOOTHING_WINDOW = 4
+OUTLIER_RADIUS = 1.5
+SMOOTHING_TAU_SECONDS = 300.0
