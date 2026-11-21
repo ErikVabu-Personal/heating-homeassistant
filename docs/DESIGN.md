@@ -359,7 +359,9 @@ It aborts with a clear message if MQTT isn't set up. The options flow edits the 
 - **Smoothing:** outlier replacement, time-based convergence (Δt independence), unknown input.
 - **Schedule:**
   - the current block and the next block start across midnight and weekday changes;
-  - daylight-saving changes in both directions;
+  - daylight-saving changes in both directions, coinciding starts and skipped dates;
+  - next-target-change lookup across equal-target blocks, midnight and weekdays;
+  - a constant week's seven-day override cap, and a change deferred by a DST gap to the following week;
   - every validation rule.
 - **Golden test:** feed the same TRV fixtures to a Python copy of the package's templates and to `demand.py`. The
   results must be identical, apart from the documented rounding fix.

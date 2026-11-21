@@ -6,7 +6,10 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def no_network(monkeypatch):
+def no_network(monkeypatch, request):
+    if request.node.get_closest_marker("integration"):
+        return
+
     def forbidden(*args, **kwargs):
         raise AssertionError("Pure logic must not open sockets")
 

@@ -1,0 +1,1 @@
+"""Boiler controller adapters."""

@@ -435,3 +435,15 @@ def test_nonconstant_week_next_change_survives_a_week_with_extra_dst_hour():
     result = schedule_at(value, now, zone)
     assert result.next_change.at == datetime(2026, 10, 25, 3, tzinfo=zone)
     assert result.until_next_change.astimezone(UTC) - now.astimezone(UTC) > timedelta(days=7)
+
+
+def test_next_change_finds_the_week_after_a_dst_gap_hides_this_weeks_change():
+    days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
+    days = (*days[:-1], Day("sun", (Block("00:00", 18), Block("02:30", 21), Block("03:00", 18))))
+    value = Profile("Profile A", days)
+    zone = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 3, 23, 12, tzinfo=zone)
+    result = schedule_at(value, now, zone)
+    assert result.next_change.at == datetime(2026, 4, 5, 2, 30, tzinfo=zone)
+    assert result.next_target == 21
+    assert result.until_next_change == result.next_change.at

@@ -7,7 +7,7 @@
   "codeowners": [
     "@ErikVabu-Personal"
   ],
-  "config_flow": false,
+  "config_flow": true,
   "dependencies": [
     "http",
     "frontend",

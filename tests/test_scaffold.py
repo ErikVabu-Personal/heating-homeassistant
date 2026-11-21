@@ -28,7 +28,7 @@ def test_logic_is_stdlib_only():
 def test_scaffold_manifest_and_hacs():
     manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["domain"] == "central_heating"
-    assert manifest["config_flow"] is False
+    assert manifest["config_flow"] is True
     assert manifest["iot_class"] == "calculated"
     assert set(manifest["dependencies"]) == {"http", "frontend", "websocket_api"}
     assert manifest["after_dependencies"] == ["mqtt"]
@@ -36,6 +36,7 @@ def test_scaffold_manifest_and_hacs():
     assert json.loads((ROOT / "hacs.json").read_text(encoding="utf-8")) == {
         "name": "Central Heating",
         "render_readme": True,
+        "homeassistant": "2026.10.0",
     }
     assert (ROOT / ".forgejo" / "workflows" / "ci.yml").is_file()
     assert not (ROOT / ".github").exists()
