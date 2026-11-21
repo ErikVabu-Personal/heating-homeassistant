@@ -42,14 +42,37 @@ def test_settings_are_passed_without_global_state():
     ) == DemandResult(0, 20, 8.5)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True, "invalid"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+        False,
+        "invalid",
+        "n/a",
+        "",
+        "Unknown",
+        "NaN",
+        "inf",
+        [],
+        {},
+        object(),
+        10**1000,
+    ],
+)
 @pytest.mark.parametrize("attribute", ["current", "target"])
-def test_invalid_temperatures_rejected(value, attribute):
+def test_invalid_temperatures_are_missing(value, attribute):
     reading = TRVReading(
         **{attribute: value, "target" if attribute == "current" else "current": 20}
     )
-    with pytest.raises(ValueError, match="finite"):
-        calculate_demand([reading])
+    result = calculate_demand([reading, TRVReading(18, 21)])
+    assert result == DemandResult(1, 18, 21)
+    alone = calculate_demand([reading])
+    assert alone.demand_count == 0
+    assert alone.virtual_temp_raw == (20 if attribute == "target" else None)
+    assert alone.virtual_setpoint == 16
 
 
 def test_inputs_and_results_are_frozen():
@@ -117,3 +140,8 @@ def test_golden_explicit_rounding_difference():
 @pytest.mark.parametrize("delta,expected", [(0.3001, 0), (0.304, 0), (0.306, 1)])
 def test_documented_hundredth_precision_threshold(delta, expected):
     assert calculate_demand([TRVReading(0, delta)]).demand_count == expected
+
+
+@pytest.mark.parametrize("current,target", [(" 20.0 ", "21"), (20, "2.1e1"), ("20", 21.0)])
+def test_finite_numeric_strings_remain_available(current, target):
+    assert calculate_demand([TRVReading(current, target)]) == DemandResult(1, 20, 21)

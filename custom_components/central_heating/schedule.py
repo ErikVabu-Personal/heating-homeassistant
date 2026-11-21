@@ -54,11 +54,13 @@ class BlockStart:
 class ScheduleResult:
     current: BlockStart
     next: BlockStart
+    next_change: BlockStart | None
+    until_next_change: datetime
 
     @property
-    def until_next_block(self) -> datetime:
-        """Absolute expiry instant for a next-block override."""
-        return self.next.at
+    def next_target(self) -> float | None:
+        """A constant week has no next target; its override still has a cap."""
+        return self.next_change.block.target if self.next_change is not None else None
 
 
 def validate_day(day: Day) -> None:
@@ -162,9 +164,21 @@ def schedule_at(profile: Profile, now: datetime, zone: ZoneInfo) -> ScheduleResu
         # wins when a DST gap maps multiple starts onto the same instant.
         return next(start for start in reversed(starts) if start.at.astimezone(UTC) == at)
 
-    return ScheduleResult(last_start(active), last_start(following))
+    current = last_start(active)
+    # Collapse coinciding starts before looking for a different target: a block
+    # shadowed by a later block at the same instant never becomes effective.
+    effective = {start.at.astimezone(UTC): start for start in starts}
+    cap = instant + timedelta(days=7)
+    changes = [
+        (at, start)
+        for at, start in effective.items()
+        if instant < at and start.block.target != current.block.target
+    ]
+    change = min(changes, key=lambda pair: pair[0])[1] if changes else None
+    expiry = change.at if change is not None else cap.astimezone(zone)
+    return ScheduleResult(current, last_start(following), change, expiry)
 
 
-def until_next_block(profile: Profile, now: datetime, zone: ZoneInfo) -> datetime:
-    """Compute a next-block override's aware expiration timestamp."""
-    return schedule_at(profile, now, zone).until_next_block
+def until_next_change(profile: Profile, now: datetime, zone: ZoneInfo) -> datetime:
+    """Expire at the next different target, or seven elapsed days for a constant week."""
+    return schedule_at(profile, now, zone).until_next_change

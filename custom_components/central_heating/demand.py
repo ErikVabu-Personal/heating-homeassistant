@@ -26,16 +26,14 @@ class DemandResult:
 
 def available_temperature(value: Temperature) -> float | None:
     """Convert state values without letting unavailable or nonfinite values propagate."""
-    if value is None or value in ("unknown", "unavailable"):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
-    if isinstance(value, bool):
-        raise ValueError("Temperature must be a finite number")
     try:
         number = float(value)
-    except (TypeError, ValueError):
-        raise ValueError("Temperature must be a finite number") from None
+    except ValueError, OverflowError:
+        return None
     if not isfinite(number):
-        raise ValueError("Temperature must be a finite number")
+        return None
     return number
 
 

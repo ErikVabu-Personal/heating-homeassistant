@@ -9,9 +9,9 @@ from .const import OUTLIER_RADIUS, SMOOTHING_TAU_SECONDS, SMOOTHING_WINDOW
 
 @dataclass(frozen=True)
 class SmoothingState:
-    """Full-precision internal value and last accepted updates (seconds)."""
+    """Full-precision internal value and last four raw values (rejected ones included)."""
 
-    accepted: tuple[float, ...] = ()
+    raw_values: tuple[float, ...] = ()
     value: float | None = None
     timestamp: float | None = None
 
@@ -34,20 +34,18 @@ def smooth(sample: SmoothingInput, state: SmoothingState = SmoothingState()) -> 
         return SmoothingResult(state, None)
     if not isfinite(sample.raw) or not isfinite(sample.timestamp):
         raise ValueError("Smoothing samples must be finite")
-    if state.timestamp is not None and sample.timestamp < state.timestamp:
-        raise ValueError("Smoothing timestamps must not move backwards")
     value = sample.raw
-    if state.accepted:
-        centre = median(state.accepted)
+    if len(state.raw_values) == SMOOTHING_WINDOW:
+        centre = median(state.raw_values)
         if abs(value - centre) > OUTLIER_RADIUS:
             value = centre
-    accepted = (*state.accepted, value)[-SMOOTHING_WINDOW:]
+    raw_values = (*state.raw_values, sample.raw)[-SMOOTHING_WINDOW:]
     if state.value is None:
         filtered = value
     else:
         if state.timestamp is None:
             raise ValueError("Initialized smoothing state needs a timestamp")
-        elapsed = sample.timestamp - state.timestamp
+        elapsed = max(0.0, sample.timestamp - state.timestamp)
         filtered = state.value + (value - state.value) * -expm1(-elapsed / SMOOTHING_TAU_SECONDS)
-    updated = SmoothingState(accepted, filtered, sample.timestamp)
+    updated = SmoothingState(raw_values, filtered, sample.timestamp)
     return SmoothingResult(updated, round(filtered, 2))

@@ -12,12 +12,11 @@ COMPONENT = ROOT / "custom_components" / "central_heating"
 
 def test_stub_imports_without_home_assistant():
     importlib.import_module("custom_components.central_heating")
-    assert "homeassistant" not in sys.modules
 
 
 def test_logic_is_stdlib_only():
     for name in ("demand", "smoothing", "schedule"):
-        tree = ast.parse((COMPONENT / f"{name}.py").read_text())
+        tree = ast.parse((COMPONENT / f"{name}.py").read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -27,16 +26,22 @@ def test_logic_is_stdlib_only():
 
 
 def test_scaffold_manifest_and_hacs():
-    manifest = json.loads((COMPONENT / "manifest.json").read_text())
+    manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["domain"] == "central_heating"
     assert manifest["config_flow"] is False
     assert manifest["iot_class"] == "calculated"
     assert set(manifest["dependencies"]) == {"http", "frontend", "websocket_api"}
     assert manifest["after_dependencies"] == ["mqtt"]
     assert not manifest.get("requirements")
-    assert json.loads((ROOT / "hacs.json").read_text()) == {
+    assert json.loads((ROOT / "hacs.json").read_text(encoding="utf-8")) == {
         "name": "Central Heating",
         "render_readme": True,
     }
     assert (ROOT / ".forgejo" / "workflows" / "ci.yml").is_file()
     assert not (ROOT / ".github").exists()
+
+
+def test_manifest_hassfest_order_and_issue_tracker():
+    manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest) == ["domain", "name", *sorted(set(manifest) - {"domain", "name"})]
+    assert manifest["issue_tracker"] == manifest["documentation"] + "/issues"

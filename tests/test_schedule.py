@@ -15,7 +15,7 @@ from custom_components.central_heating.schedule import (
     Room,
     resolve_start,
     schedule_at,
-    until_next_block,
+    until_next_change,
     validate_day,
     validate_profile,
     validate_profile_deletion,
@@ -222,7 +222,7 @@ def test_current_next_and_override_expiry(now, current, next_start):
     assert result.current.block.start == current
     assert result.next.at.isoformat() == next_start
     assert result.next.at.astimezone(UTC) > now.astimezone(UTC)
-    assert result.until_next_block == until_next_block(value, now, zone) == result.next.at
+    assert result.until_next_change == until_next_change(value, now, zone) == result.next.at
     assert schedule_at(value, result.next.at, zone).current.block == result.next.block
 
 
@@ -316,7 +316,7 @@ def test_spring_collision_last_scheduled_block_wins(explicit_three, query_zone):
     assert before.current.block.start == "00:00"
     assert before.next.block.start == ("03:00" if explicit_three else "02:55")
     assert before.next.at.astimezone(UTC) == instant
-    assert until_next_block(value, instant - timedelta(seconds=1), zone).astimezone(UTC) == instant
+    assert until_next_change(value, instant - timedelta(seconds=1), zone).astimezone(UTC) == instant
     for after in (instant, instant + timedelta(seconds=1), instant + timedelta(minutes=59)):
         result = schedule_at(value, after.astimezone(ZoneInfo(query_zone)), zone)
         assert result.current.block == before.next.block
@@ -344,3 +344,94 @@ def test_half_hour_dst_gap_uses_next_valid_minute():
     assert shifted.hour == 2 and shifted.minute == 30
     value = weekly((Block("00:00", 18), Block("02:15", 20), Block("02:30", 21)))
     assert schedule_at(value, shifted, zone).current.block.start == "02:30"
+
+
+def test_override_skips_midnight_and_equal_target_blocks_until_next_change():
+    value = weekly((Block("00:00", 18), Block("07:00", 21), Block("18:00", 18), Block("22:00", 18)))
+    zone = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 1, 5, 23, tzinfo=zone)
+    result = schedule_at(value, now, zone)
+    assert result.next.at == datetime(2026, 1, 6, 0, tzinfo=zone)
+    assert result.next_change.at == datetime(2026, 1, 6, 7, tzinfo=zone)
+    assert result.next_target == 21
+    assert until_next_change(value, now, zone) == result.next_change.at
+    assert schedule_at(value, result.next_change.at, zone).current.block.target == 21
+
+
+def test_next_change_searches_across_days_and_week_boundary():
+    days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
+    days = (*days[:2], Day("wed", (Block("00:00", 18), Block("07:00", 21))), *days[3:])
+    value = Profile("Profile A", days)
+    zone = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 1, 11, 23, tzinfo=zone)  # Sunday
+    result = schedule_at(value, now, zone)
+    assert result.next_change.at == datetime(2026, 1, 14, 7, tzinfo=zone)
+    assert result.next_target == 21
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2026, 1, 5, 23, tzinfo=UTC),
+        datetime(2026, 3, 28, 23, tzinfo=UTC),
+        datetime(2026, 10, 24, 23, tzinfo=UTC),
+    ],
+)
+def test_constant_week_caps_override_at_seven_elapsed_days(now):
+    value = weekly((Block("00:00", 18), Block("06:00", 18), Block("23:00", 18)))
+    zone = ZoneInfo("Europe/Berlin")
+    result = schedule_at(value, now, zone)
+    assert result.next_change is None
+    assert result.next_target is None
+    assert result.until_next_change.astimezone(UTC) == now + timedelta(days=7)
+    assert until_next_change(value, now, zone) == result.until_next_change
+
+
+def test_next_change_ignores_overwritten_dst_collision_target():
+    value = weekly((Block("00:00", 18), Block("02:30", 21), Block("03:00", 18), Block("07:00", 22)))
+    zone = ZoneInfo("Europe/Berlin")
+    result = schedule_at(value, datetime(2026, 3, 29, 0, 59, tzinfo=UTC), zone)
+    assert result.next.block.start == "03:00"
+    assert result.next_change.block.start == "07:00"
+    assert result.next_target == 22
+
+
+def test_next_change_uses_first_autumn_occurrence():
+    value = weekly((Block("00:00", 18), Block("02:30", 21)))
+    zone = ZoneInfo("Europe/Berlin")
+    result = schedule_at(value, datetime(2026, 10, 25, 0, 29, tzinfo=UTC), zone)
+    assert result.next_change.at.astimezone(UTC) == datetime(2026, 10, 25, 0, 30, tzinfo=UTC)
+    repeated = schedule_at(value, datetime(2026, 10, 25, 1, 10, tzinfo=UTC), zone)
+    assert repeated.next_change.at.isoformat() == "2026-10-26T00:00:00+01:00"
+
+
+def test_skipped_date_uses_following_days_effective_block():
+    zone = ZoneInfo("Pacific/Apia")
+    value = Profile(
+        "Profile A",
+        tuple(Day(day, (Block("00:00", 18 + index / 2),)) for index, day in enumerate(WEEKDAYS)),
+    )
+    now = datetime(2011, 12, 29, 23, 59, tzinfo=zone)
+    result = schedule_at(value, now, zone)
+    assert result.current.at.date() == date(2011, 12, 29)
+    assert result.next.at.isoformat() == "2011-12-31T00:00:00+14:00"
+    assert result.next.block.target == 20.5  # Saturday wins over the skipped Friday.
+    assert result.next_change == result.next
+    assert schedule_at(value, result.next.at, zone).current.block.target == 20.5
+
+
+def test_schedule_lookup_rejects_invalid_profile():
+    value = replace(profile(), days=profile().days[:-1])
+    with pytest.raises(ValueError, match="weekday"):
+        schedule_at(value, datetime(2026, 1, 5, tzinfo=UTC), ZoneInfo("UTC"))
+
+
+def test_nonconstant_week_next_change_survives_a_week_with_extra_dst_hour():
+    days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
+    days = (*days[:-1], Day("sun", (Block("00:00", 18), Block("03:00", 21), Block("03:05", 18))))
+    value = Profile("Profile A", days)
+    zone = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 10, 18, 3, 6, tzinfo=zone)
+    result = schedule_at(value, now, zone)
+    assert result.next_change.at == datetime(2026, 10, 25, 3, tzinfo=zone)
+    assert result.until_next_change.astimezone(UTC) - now.astimezone(UTC) > timedelta(days=7)

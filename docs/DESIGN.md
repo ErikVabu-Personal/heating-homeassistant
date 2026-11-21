@@ -88,8 +88,8 @@ directly. Section 5 gives the full rules.
 ## 5. Boiler control
 
 ### 5.1 Demand, virtual temperature and setpoint
-For each TRV in any enabled room, with `c` = `current_temperature` and `t` = target (`temperature`). A value counts
-as available unless it's `None`, `unknown` or `unavailable`.
+For each TRV in any enabled room, with `c` = `current_temperature` and `t` = target (`temperature`).
+Anything that isn't a finite number (an int, a float or a numeric string, excluding booleans) counts as missing.
 
 - **Demanding:** `c` and `t` are both available, and `round(t − c, 2) > round(hysteresis, 2)`.
 - `demand_count` is the number of demanding TRVs.
@@ -106,10 +106,12 @@ Defaults: `hysteresis` 0.3 °C (allowed 0.1–1.0, step 0.1); `frost_temperature
 `virtual_temp` = smoothed `virtual_temp_raw`. The low-pass filter is time-based, so it doesn't depend on how often
 the raw value happens to change.
 
-1. **Outlier rejection:** keep a window of the last 4 accepted raw values. If a new value differs from the window's
-   median by more than 1.5 °C, use the median instead.
+1. **Outlier rejection:** keep a window of the last 4 raw values, rejected ones included; a value is only
+   rejected once the window is full. If a new value differs from the previous window's median by more than
+   1.5 °C, use the median instead for the low-pass input, while storing the raw sample in the window.
 2. **Low-pass:** `y ← y + (x − y) · (1 − e^(−Δt/τ))`, with τ = 300 s and Δt the seconds since the last update. The
-   first value initialises `y`. Rounded to 2 decimals.
+   first value initialises `y`. Rounded to 2 decimals. The engine passes a monotonic clock; a negative Δt
+   is treated as zero, retaining `y` and updating the timestamp.
 3. **Unknown raw value:** smoothing state is kept, and nothing is sent (§5.4).
 
 ### 5.3 Boiler adapter
@@ -226,8 +228,10 @@ uses its first occurrence.
   target.
 
 ### 6.4 Overrides
-- **From the card or a service:** a target, plus either `next_block` (until the room's next block start) or a
-  number of minutes.
+- **From the card or a service:** a target, plus either `next_block` (until the room's next target change) or a
+  number of minutes. "Until the next change" means the next effective block start whose target differs from
+  the currently scheduled target, skipping equal-target blocks across midnight and days. If the entire week
+  has one target, the override expires after seven elapsed days. The stored `next_block` option keeps its name.
 - **From a TRV knob:** a TRV target change to a value that differs from `last_commanded` becomes an override, using
   `settings.override_default`. If `sync_rooms_on_knob_change` is on, the other TRVs in that room get the same
   target.
@@ -250,6 +254,9 @@ All unique IDs are `<entry_id>_<key>`. Entity names are translated; there are no
 | `sensor` | demand count, virtual temperature, virtual temperature (raw), virtual setpoint | °C where it applies, with `state_class: measurement` |
 | `binary_sensor` | boiler call | on when the computed command has `heat = true`. Attributes: the last command, the last time it was sent, `shadow`. |
 | `number` | frost temperature, hysteresis, away temperature | write to `settings` |
+
+The room attributes `next_change` and `next_target` describe the next effective target change from §6.4,
+not merely the next block start; both are absent when the schedule has no target change.
 
 **Diagnostics:** settings, rooms, profiles, mode, overrides, the last command and the timing of sends. No
 credentials are involved.
@@ -297,7 +304,7 @@ Every command validates with voluptuous, returns structured errors, and never pa
      shadow-mode badge;
    - a list of rooms with current and target temperature, a flame icon when demanding, and an override badge
      ("22° until 18:00").
-   - Tapping a room opens a quick override with − and + buttons and a choice of "until next block", 1 h, 2 h, 3 h or
+   - Tapping a room opens a quick override with − and + buttons and a choice of "until the next change", 1 h, 2 h, 3 h or
      a custom time, plus "back to schedule".
 2. **Schedules:**
    - a list of profiles, and for each profile a week grid with 7 rows of 24 hours, the blocks coloured by
