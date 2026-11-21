@@ -80,6 +80,32 @@
     "mqtt_unavailable": {
       "title": "MQTT unavailable",
       "description": "Central Heating cannot send boiler commands. Check the MQTT integration."
+    },
+    "sync_problem": {
+      "title": "Room synchronization failed",
+      "description": "A radiator thermostat did not confirm its target after three retries. Check the device; this issue clears after a successful synchronization."
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Set mode",
+      "description": "Set mode",
+      "fields": {}
+    },
+    "set_override": {
+      "name": "Set a room override",
+      "description": "Set a room override",
+      "fields": {}
+    },
+    "clear_override": {
+      "name": "Clear a room override",
+      "description": "Clear a room override",
+      "fields": {}
+    },
+    "apply_now": {
+      "name": "Apply current targets",
+      "description": "Apply current targets",
+      "fields": {}
     }
   }
 }

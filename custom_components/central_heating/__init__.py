@@ -6,7 +6,14 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
-PLATFORMS = ["select", "switch", "sensor", "binary_sensor", "number"]
+PLATFORMS = ["select", "switch", "sensor", "binary_sensor", "number", "climate"]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    from .services import async_register_services
+
+    async_register_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -17,6 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .const import ADAPTER
     from .engine import HeatingEngine
     from .storage import HeatingStore
+    from .rooms import RoomController
 
     try:
         if entry.data["adapter"] != ADAPTER:
@@ -27,6 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (ValueError, KeyError) as exc:
         raise ConfigEntryError(str(exc)) from exc
     entry.runtime_data = HeatingEngine(hass, store, DiylessAdapter(hass, entry.entry_id, prefix))
+    entry.runtime_data.rooms = RoomController(entry.runtime_data, entry.entry_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await entry.runtime_data.async_start()
     entry.async_on_unload(entry.add_update_listener(_options_updated))

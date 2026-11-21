@@ -416,7 +416,9 @@ Each pull request includes its tests and passing CI. Each is reviewed independen
 
 1. **Scaffold and pure logic:** the layout, manifest, hacs.json, CI, `demand.py`, `smoothing.py` and `schedule.py`
    with full tests, including the golden test.
-2. **Engine and boiler:**
+2. **Engine and boiler** (split for independent review):
+   - **2a:** config/options flow, Store, boiler engine/adapter, shadow, mode select and boiler measurements/numbers;
+   - **2b:** room climates/control, overrides, retries, services and diagnostics;
    - the config flow, Store, engine, the DIYLESS adapter, shadow mode and the mode select;
    - the sensors, binary sensor, numbers and room climates;
    - the services and diagnostics;

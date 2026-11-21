@@ -43,6 +43,7 @@ class HeatingEngine:
         self._state_unsubscribe: Callable[[], None] | None = None
         self._stopped = False
         self._shutting_down = False
+        self.rooms = None
 
     @callback
     def listen(self, listener: Callable[[], None]) -> Callable[[], None]:
@@ -83,6 +84,10 @@ class HeatingEngine:
         await self.async_recalculate()
 
     async def _trv_changed(self, event: Event) -> None:
+        if self.rooms is not None:
+            async with self._lock:
+                if not self._stopped:
+                    await self.rooms.async_changed(event)
         await self.async_recalculate()
 
     async def _shutdown(self, event: Event) -> None:
@@ -94,6 +99,8 @@ class HeatingEngine:
             if self._stopped:
                 return
             self._stopped = True
+            if self.rooms is not None:
+                self.rooms.stop()
             for unsubscribe in self._unsubscribers:
                 unsubscribe()
             self._unsubscribers.clear()
@@ -111,6 +118,8 @@ class HeatingEngine:
             mode = self.store.data.mode
             if mode.until is not None and mode.until.astimezone(UTC) <= now:
                 await self.store.async_update(lambda data: replace(data, mode=Mode("auto")))
+            if self.rooms is not None:
+                await self.rooms.async_apply()
             readings = []
             for room in self.store.data.rooms:
                 if not room.enabled:
