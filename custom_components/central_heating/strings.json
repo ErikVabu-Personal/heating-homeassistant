@@ -12,10 +12,12 @@
       }
     },
     "error": {
-      "invalid_config": "Check the supplied configuration."
+      "invalid_config": "Enter a valid MQTT topic prefix without wildcards or a trailing slash.",
+      "already_configured": "This boiler prefix is already configured."
     },
     "abort": {
-      "mqtt_required": "Set up the MQTT integration first."
+      "mqtt_required": "Set up the MQTT integration first.",
+      "already_configured": "This boiler prefix is already configured."
     }
   },
   "options": {
@@ -28,7 +30,8 @@
       }
     },
     "error": {
-      "invalid_config": "Check the MQTT topic prefix."
+      "invalid_config": "Enter a valid MQTT topic prefix without wildcards or a trailing slash.",
+      "already_configured": "This boiler prefix is already configured."
     }
   },
   "entity": {

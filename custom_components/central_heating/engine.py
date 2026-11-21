@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
@@ -104,7 +105,7 @@ class HeatingEngine:
 
     async def async_recalculate(self) -> None:
         async with self._lock:
-            if self._stopped or self._shutting_down:
+            if self._stopped or self._shutting_down or self.hass.state is not CoreState.running:
                 return
             now = dt_util.utcnow()
             mode = self.store.data.mode
@@ -142,12 +143,12 @@ class HeatingEngine:
             if not self.store.data.shadow:
                 if self._last_source_tick is None or tick - self._last_source_tick >= 21600:
                     await self.adapter.async_start()
-                    if getattr(self.adapter, "last_success", True):
+                    if self.adapter.last_success:
                         self._last_source_tick = tick
                 keepalive = self._last_send_tick is None or tick - self._last_send_tick >= 30
                 if self.command != self._last_command or keepalive:
                     await self.adapter.async_apply(self.command, keepalive=keepalive)
-                    if getattr(self.adapter, "last_success", True):
+                    if self.adapter.last_success:
                         self._last_command = self.command
                         self._last_send_tick = tick
                         self.last_sent = now
@@ -155,7 +156,10 @@ class HeatingEngine:
 
     async def async_set_mode(self, value: str, until: datetime | None = None) -> None:
         async with self._lock:
-            await self.store.async_update(lambda data: replace(data, mode=Mode(value, until)))
+            try:
+                await self.store.async_update(lambda data: replace(data, mode=Mode(value, until)))
+            except ValueError as exc:
+                raise ServiceValidationError(str(exc)) from exc
         await self.async_recalculate()
 
     async def async_set_shadow(self, enabled: bool) -> None:
@@ -167,7 +171,10 @@ class HeatingEngine:
 
     async def async_settings(self, **changes) -> None:
         async with self._lock:
-            await self.store.async_settings(**changes)
+            try:
+                await self.store.async_settings(**changes)
+            except ValueError as exc:
+                raise ServiceValidationError(str(exc)) from exc
         await self.async_recalculate()
 
     async def async_data_changed(self) -> None:

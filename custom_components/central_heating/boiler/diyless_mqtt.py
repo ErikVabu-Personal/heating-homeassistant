@@ -18,6 +18,7 @@ class DiylessAdapter:
     def __init__(self, hass: HomeAssistant, entry_id: str, prefix: str) -> None:
         self.hass, self.entry_id, self.prefix = hass, entry_id, prefix
         self.last_success = False
+        self._mqtt_unavailable = False
 
     async def _publish(self, values: dict[str, str]) -> None:
         self.last_success = False
@@ -36,9 +37,13 @@ class DiylessAdapter:
             self._unavailable()
             return
         self.last_success = True
+        self._mqtt_unavailable = False
         ir.async_delete_issue(self.hass, DOMAIN, f"mqtt_{self.entry_id}")
 
     def _unavailable(self) -> None:
+        if self._mqtt_unavailable:
+            return
+        self._mqtt_unavailable = True
         _LOGGER.warning("Central Heating cannot send: MQTT is unavailable")
         ir.async_create_issue(
             self.hass,

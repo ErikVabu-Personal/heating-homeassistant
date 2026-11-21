@@ -33,16 +33,23 @@ class CentralHeatingConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required("name", default="Central Heating"): vol.All(str, vol.Length(min=1)),
                 vol.Required("adapter", default=ADAPTER): vol.In([ADAPTER]),
-                vol.Required("prefix", default=DEFAULT_PREFIX): vol.All(str, validate_prefix),
+                vol.Required("prefix", default=DEFAULT_PREFIX): str,
             }
         )
         errors = {}
         if user_input is not None:
             try:
                 clean = schema(user_input)
+                clean["prefix"] = validate_prefix(clean["prefix"])
             except vol.Invalid:
-                errors["base"] = "invalid_config"
+                errors["prefix"] = "invalid_config"
             else:
+                self._async_abort_entries_match({"prefix": clean["prefix"]})
+                if any(
+                    entry.options.get("prefix", entry.data.get("prefix")) == clean["prefix"]
+                    for entry in self._async_current_entries()
+                ):
+                    return self.async_abort(reason="already_configured")
                 return self.async_create_entry(title=clean["name"], data=clean)
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
@@ -61,15 +68,23 @@ class CentralHeatingOptionsFlow(OptionsFlow):
                     default=self.config_entry.options.get(
                         "prefix", self.config_entry.data["prefix"]
                     ),
-                ): vol.All(str, validate_prefix)
+                ): str
             }
         )
         errors = {}
         if user_input is not None:
             try:
                 clean = schema(user_input)
+                clean["prefix"] = validate_prefix(clean["prefix"])
             except vol.Invalid:
-                errors["base"] = "invalid_config"
+                errors["prefix"] = "invalid_config"
             else:
-                return self.async_create_entry(title="", data=clean)
+                if any(
+                    entry.entry_id != self.config_entry.entry_id
+                    and entry.options.get("prefix", entry.data.get("prefix")) == clean["prefix"]
+                    for entry in self.hass.config_entries.async_entries(DOMAIN)
+                ):
+                    errors["prefix"] = "already_configured"
+                else:
+                    return self.async_create_entry(title="", data=clean)
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

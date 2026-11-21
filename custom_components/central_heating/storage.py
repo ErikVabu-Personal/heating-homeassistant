@@ -1,4 +1,4 @@
-"""Validated, immutable entry data and atomic Home Assistant Store writes."""
+"""Validated immutable snapshots, serialized updates and HA-managed persistence."""
 
 import asyncio
 import re
@@ -70,11 +70,11 @@ def validate_data(data: HeatingData) -> None:
     settings = data.settings
     bounded(settings.hysteresis, 0.1, 1.0, 0.1)
     bounded(settings.frost_temperature, 5, 18, 0.5)
-    bounded(settings.away_temperature, 5, 30)
+    bounded(settings.away_temperature, 5, 30, 0.5)
     if settings.override_default not in ("next_block", "duration"):
         raise ValueError("Invalid default override kind")
-    if type(settings.override_minutes) is not int or settings.override_minutes <= 0:
-        raise ValueError("Override minutes must be a positive integer")
+    if type(settings.override_minutes) is not int or not 1 <= settings.override_minutes <= 10080:
+        raise ValueError("Override minutes must be an integer from 1 to 10080")
     if type(settings.sync_rooms_on_knob_change) is not bool or type(data.shadow) is not bool:
         raise ValueError("Expected a boolean")
     if (
@@ -200,14 +200,23 @@ def from_json(raw: dict[str, Any]) -> HeatingData:
 
 
 class HeatingStore:
-    """Persist first, then publish a validated immutable snapshot under one lock."""
+    """Serialize validated updates. HA logs disk errors; memory still advances."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         from homeassistant.helpers.storage import Store
 
-        self._store = Store(hass, 1, f"{DOMAIN}.{entry_id}")
+        class VersionedStore(Store):
+            async def _async_migrate_func(self, old_major, old_minor, raw):
+                if old_major != 1:
+                    raise ValueError("Unsupported heating Store version")
+                return to_json(from_json(raw))
+
+        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=2)
         self._lock = asyncio.Lock()
         self.data = HeatingData()
+
+    async def async_remove(self) -> None:
+        await self._store.async_remove()
 
     async def async_load(self) -> None:
         raw = await self._store.async_load()

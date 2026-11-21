@@ -195,16 +195,19 @@ async def test_entry_entities_start_manual_shadow_and_keep_settings(hass, mqtt_m
     assert reloaded.data.settings.frost_temperature == 8
 
 
-async def test_store_validation_and_failed_persistence_are_atomic(hass):
+async def test_store_validation_atomic_and_disk_failure_logged(hass, caplog):
+    from homeassistant.util.file import WriteError
+
     store = HeatingStore(hass, "entry_a")
     original = store.data
     with pytest.raises(ValueError):
         await store.async_settings(hysteresis=0.15)
     assert store.data is original
-    with patch.object(store._store, "async_save", side_effect=OSError("test failure")):
-        with pytest.raises(OSError):
-            await store.async_settings(frost_temperature=8)
-    assert store.data is original
+    # Fail below Store.async_save: this is where HA catches a real disk failure.
+    with patch.object(store._store, "_async_write_data", side_effect=WriteError("disk full")):
+        await store.async_settings(frost_temperature=8)
+    assert store.data.settings.frost_temperature == 8
+    assert "Error writing config" in caplog.text
 
 
 async def test_event_recalculation_startup_and_ten_second_timer(hass, freezer):
@@ -249,21 +252,224 @@ async def test_mqtt_repair_clears_when_connection_is_available(hass, mqtt_mock):
 
 async def test_config_flow_rejects_wildcard_prefix(hass, mqtt_mock):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    from homeassistant.data_entry_flow import InvalidData
-
-    with pytest.raises(InvalidData):
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            {"name": "Boiler A", "adapter": ADAPTER, "prefix": DEFAULT_PREFIX + "/#"},
-        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Boiler A", "adapter": ADAPTER, "prefix": DEFAULT_PREFIX + "/#"},
+    )
+    assert result["errors"] == {"prefix": "invalid_config"}
 
 
 async def test_concurrent_settings_writes_do_not_lose_updates(hass):
     import asyncio
 
     store = HeatingStore(hass, "entry_a")
-    await asyncio.gather(
-        store.async_settings(frost_temperature=8), store.async_settings(away_temperature=10)
-    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def paused_save(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+
+    with patch.object(store._store, "async_save", side_effect=paused_save):
+        first = asyncio.create_task(store.async_settings(frost_temperature=8))
+        await entered.wait()
+        second = asyncio.create_task(store.async_settings(away_temperature=10))
+        await asyncio.sleep(0)
+        assert len(calls) == 1
+        release.set()
+        await asyncio.gather(first, second)
     assert store.data.settings.frost_temperature == 8
     assert store.data.settings.away_temperature == 10
+
+
+async def test_http_config_and_options_forms_serialize(hass, mqtt_mock, hass_client):
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+    client = await hass_client()
+    response = await client.post("/api/config/config_entries/flow", json={"handler": DOMAIN})
+    assert response.status == 200
+    form = await response.json()
+    assert any(field["name"] == "prefix" for field in form["data_schema"])
+    response = await client.post(
+        f"/api/config/config_entries/flow/{form['flow_id']}",
+        json={"name": "Boiler A", "adapter": ADAPTER, "prefix": "invalid/#"},
+    )
+    assert response.status == 200
+    assert (await response.json())["errors"] == {"prefix": "invalid_config"}
+    with patch("custom_components.central_heating.async_setup_entry", return_value=True):
+        response = await client.post(
+            f"/api/config/config_entries/flow/{form['flow_id']}",
+            json={"name": "Boiler A", "adapter": ADAPTER, "prefix": DEFAULT_PREFIX},
+        )
+        assert response.status == 200
+        created = await response.json()
+        await hass.async_block_till_done()
+    response = await client.post(
+        "/api/config/config_entries/options/flow", json={"handler": created["result"]["entry_id"]}
+    )
+    assert response.status == 200
+    options = await response.json()
+    assert options["data_schema"][0]["name"] == "prefix"
+    response = await client.post(
+        f"/api/config/config_entries/options/flow/{options['flow_id']}",
+        json={"prefix": "invalid/#"},
+    )
+    assert response.status == 200
+    assert (await response.json())["errors"] == {"prefix": "invalid_config"}
+
+
+async def test_starting_tick_and_trv_event_never_call_adapter(hass, mqtt_mock):
+    from homeassistant.core import CoreState
+
+    engine, _ = await build_engine(hass)
+    hass.state = CoreState.starting
+    with (
+        patch.object(engine.adapter, "async_start") as start,
+        patch.object(engine.adapter, "async_apply") as apply,
+    ):
+        await engine.async_start()
+        await engine._tick(datetime.now(UTC))
+        hass.states.async_set(
+            "climate.trv_a", "heat", {"temperature": 25, "current_temperature": 18}
+        )
+        await hass.async_block_till_done()
+        start.assert_not_called()
+        apply.assert_not_called()
+    await engine.async_stop(unloading=False)
+
+
+async def test_duplicate_prefix_aborts(hass, mqtt_mock):
+    entry = MockConfigEntry(domain=DOMAIN, data={"adapter": ADAPTER, "prefix": DEFAULT_PREFIX})
+    entry.add_to_hass(hass)
+    form = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        form["flow_id"], {"name": "Boiler B", "adapter": ADAPTER, "prefix": DEFAULT_PREFIX}
+    )
+    assert result["type"] == "abort" and result["reason"] == "already_configured"
+
+
+async def test_entry_actions_ids_options_and_real_unload(hass, mqtt_mock):
+    from homeassistant.exceptions import ServiceValidationError
+    from homeassistant.helpers import entity_registry as er
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Boiler A", data={"adapter": ADAPTER, "prefix": DEFAULT_PREFIX}
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+
+    def entity_id(platform, key):
+        found = registry.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{key}")
+        assert found is not None
+        return found
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": entity_id("number", "away_temperature"), "value": 15.5},
+        blocking=True,
+    )
+    assert entry.runtime_data.store.data.settings.away_temperature == 15.5
+    with pytest.raises(ServiceValidationError):
+        from custom_components.central_heating.number import SettingNumber
+
+        await SettingNumber(entry, "away_temperature").async_set_native_value(15.25)
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": entity_id("select", "mode"), "option": "summer"},
+        blocking=True,
+    )
+    assert entry.runtime_data.store.data.mode.value == "summer"
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": entity_id("switch", "shadow")}, blocking=True
+    )
+    assert not entry.runtime_data.store.data.shadow
+    assert entry.runtime_data._last_send_tick is not None
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": entity_id("switch", "shadow")}, blocking=True
+    )
+    assert entry.runtime_data._last_send_tick is None
+    assert entry.runtime_data._last_source_tick is None
+    assert entry.runtime_data._last_command is None
+    assert "last_sent" not in hass.states.get(entity_id("binary_sensor", "boiler_call")).attributes
+    with patch.object(hass.config_entries, "async_reload", return_value=True) as reload:
+        options = await hass.config_entries.options.async_init(entry.entry_id)
+        await hass.config_entries.options.async_configure(
+            options["flow_id"], {"prefix": DEFAULT_PREFIX}
+        )
+        await hass.async_block_till_done()
+        reload.assert_not_called()
+    options = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        options["flow_id"], {"prefix": "boiler_b/properties"}
+    )
+    await hass.async_block_till_done()
+    assert entry.runtime_data.adapter.prefix == "boiler_b/properties"
+    await entry.runtime_data.async_set_shadow(False)
+    engine = entry.runtime_data
+    mqtt_mock.async_publish.reset_mock()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert engine._stopped
+    assert engine._state_unsubscribe is None and not engine._unsubscribers
+    assert messages(mqtt_mock) == [("boiler_b/properties/mode", "off", 0, False)]
+
+
+async def test_store_minor_migration_and_entry_removal(hass, hass_storage):
+    from custom_components.central_heating import async_remove_entry
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    hass_storage[f"{DOMAIN}.{entry.entry_id}"] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": f"{DOMAIN}.{entry.entry_id}",
+        "data": {"settings": {"frost_temperature": 8}},
+    }
+    store = HeatingStore(hass, entry.entry_id)
+    await store.async_load()
+    assert store.data.shadow and store.data.settings.frost_temperature == 8
+    assert hass_storage[f"{DOMAIN}.{entry.entry_id}"]["minor_version"] == 2
+    DiylessAdapter(hass, entry.entry_id, DEFAULT_PREFIX)._unavailable()
+    await async_remove_entry(hass, entry)
+    assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage
+    assert ir.async_get(hass).async_get_issue(DOMAIN, f"mqtt_{entry.entry_id}") is None
+
+
+async def test_invalid_entry_data_is_config_entry_error(hass):
+    from homeassistant.exceptions import ConfigEntryError
+
+    from custom_components.central_heating import async_setup_entry
+
+    entry = MockConfigEntry(domain=DOMAIN, data={"adapter": "invalid", "prefix": DEFAULT_PREFIX})
+    with pytest.raises(ConfigEntryError):
+        await async_setup_entry(hass, entry)
+    entry = MockConfigEntry(domain=DOMAIN, data={"adapter": ADAPTER, "prefix": DEFAULT_PREFIX})
+    with patch.object(HeatingStore, "async_load", side_effect=ValueError("bad stored data")):
+        with pytest.raises(ConfigEntryError):
+            await async_setup_entry(hass, entry)
+
+
+async def test_mqtt_unavailable_logged_once_per_transition(hass, caplog):
+    adapter = DiylessAdapter(hass, "entry_a", DEFAULT_PREFIX)
+    for _ in range(4):
+        await adapter.async_start()
+    assert caplog.text.count("Central Heating cannot send") == 1
+    with (
+        patch("homeassistant.components.mqtt.async_publish"),
+        patch.object(hass.config_entries, "async_entries") as entries,
+    ):
+        from unittest.mock import Mock
+
+        from homeassistant.config_entries import ConfigEntryState
+
+        entries.return_value = [Mock(state=ConfigEntryState.LOADED)]
+        await adapter.async_start()
+    await adapter.async_start()
+    assert caplog.text.count("Central Heating cannot send") == 2

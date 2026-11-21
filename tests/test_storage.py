@@ -47,6 +47,8 @@ def test_json_roundtrip_and_detached_containers():
         ("frost_temperature", 18.5),
         ("frost_temperature", 16.2),
         ("away_temperature", 4.9),
+        ("away_temperature", 15.25),
+        ("override_minutes", 10081),
         ("away_temperature", 30.1),
         ("away_temperature", float("nan")),
         ("override_default", "other"),
@@ -67,7 +69,7 @@ def test_invalid_settings_rejected(field, value):
 
 @pytest.mark.parametrize("hysteresis", [0.1, 0.3, 1.0])
 @pytest.mark.parametrize("frost", [5, 16, 18])
-@pytest.mark.parametrize("away", [5, 15.25, 30])
+@pytest.mark.parametrize("away", [5, 15.5, 30])
 def test_settings_boundaries_and_float_steps(hysteresis, frost, away):
     data = HeatingData()
     validate_data(
@@ -127,3 +129,10 @@ def test_invalid_mode_or_expiration_rejected(mode):
 def test_malformed_json_rejected(raw):
     with pytest.raises(ValueError):
         from_json(raw)
+
+
+@pytest.mark.parametrize("target", [4.5, 30.5, 21.25, float("nan"), True])
+def test_override_target_bounds(target):
+    data = example()
+    with pytest.raises(ValueError):
+        validate_data(replace(data, overrides=(replace(data.overrides[0], target=target),)))

@@ -1,4 +1,4 @@
-name: Pure logic
+name: Central Heating validation
 on:
   push:
     branches: [main, dev]
@@ -41,12 +41,11 @@ jobs:
         run: ruff check .
       - name: Format
         run: ruff format --check .
-      - name: Pure logic tests
+      - name: Central Heating validation tests
         run: pytest -q
 
   compatibility:
-    name: HA 2026.11.2 compatibility (non-blocking)
-    continue-on-error: true
+    name: HA 2026.11.2 compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
@@ -84,6 +83,10 @@ jobs:
         run: ruff check .
       - name: Format
         run: ruff format --check .
-      - name: HA compatibility tests (early warning only)
+      - name: Unit tests on HA 2026.11.2 (required)
+        run: pytest -q -p no:homeassistant --ignore=tests/integration
+      - name: Import every integration module on HA 2026.11.2 (required)
+        run: python scripts/import_smoke.py
+      - name: Integration tests with old plugin (expected incompatibility until 2026.11 plugin)
         continue-on-error: true
         run: python -c "import homeassistant; import pytest; raise SystemExit(pytest.main(['-q']))"

@@ -20,6 +20,5 @@ class BoilerCall(HeatingEntity, BinarySensorEntity):
     def extra_state_attributes(self):
         return {
             "last_command": asdict(self.engine.command),
-            "last_sent": self.engine.last_sent.isoformat() if self.engine.last_sent else None,
             "shadow": self.engine.store.data.shadow,
         }
