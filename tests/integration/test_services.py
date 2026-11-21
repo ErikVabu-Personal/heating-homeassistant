@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+import voluptuous as vol
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -134,3 +135,110 @@ async def test_room_entity_reports_sync_problem_and_next_target(hass, mqtt_mock)
     assert state.attributes["next_target"] in (18, 21)
     assert state.attributes["trvs"] == ["climate.trv_a"]
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_room_climate_actions_names_override_visibility_and_constant_week(hass, mqtt_mock):
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.central_heating.climate import RoomClimate
+
+    entry, room, climate = await setup_entry(hass)
+    engine = entry.runtime_data
+    entity = RoomClimate(entry, room.id)
+    entity.hass = hass
+    assert entity.name == room.name and entity.translation_key is None
+    assert entity.hvac_action == "heating"
+    await entity.async_set_hvac_mode("heat")
+    assert not engine.store.data.overrides
+    with pytest.raises(ServiceValidationError):
+        await entity.async_set_temperature(temperature=22.1)
+    await entity.async_set_temperature(temperature=22)
+    assert entity.extra_state_attributes["override_until"] is None  # manual
+    await engine.async_set_mode("auto")
+    assert entity.extra_state_attributes["override_until"] is not None
+    await engine.async_set_mode("summer")
+    assert entity.extra_state_attributes["override_until"] is None
+    await engine.async_set_mode("away")
+    assert entity.extra_state_attributes["override_until"] is not None
+    expired = replace(engine.store.data.overrides[0], until=dt_util.utcnow() - timedelta(seconds=1))
+    await engine.store.async_update(lambda data: replace(data, overrides=(expired,)))
+    assert entity.extra_state_attributes["override_until"] is None
+    constant = replace(
+        engine.store.data.profiles[0],
+        days=tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS),
+    )
+    await engine.store.async_update(lambda data: replace(data, profiles=(constant,)))
+    assert entity.extra_state_attributes["next_change"] is None
+    assert entity.extra_state_attributes["next_target"] is None
+    old = hass.states.get("climate.trv_a")
+    hass.states.async_set("climate.trv_a", "off", old.attributes)
+    await hass.async_block_till_done()
+    assert entity.hvac_action == "idle"
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_service_local_until_and_minutes_bounds(hass, mqtt_mock, freezer):
+    from datetime import UTC, datetime, timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    freezer.move_to("2026-01-05T08:00:00+00:00")
+    await hass.config.async_set_time_zone("Europe/Berlin")
+    entry, room, climate = await setup_entry(hass)
+    await hass.services.async_call(
+        DOMAIN,
+        "set_mode",
+        {"config_entry_id": entry.entry_id, "mode": "away", "until": "2026-01-05T12:00:00"},
+        blocking=True,
+    )
+    assert entry.runtime_data.store.data.mode.until.astimezone(UTC) == datetime(
+        2026, 1, 5, 11, tzinfo=UTC
+    )
+    for minutes in (1, 10080):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_override",
+            {
+                "config_entry_id": entry.entry_id,
+                "room": climate,
+                "temperature": 23,
+                "minutes": minutes,
+            },
+            blocking=True,
+        )
+        assert entry.runtime_data.store.data.overrides[0].until == dt_util.utcnow() + timedelta(
+            minutes=minutes
+        )
+    for minutes in (0, 10081):
+        with pytest.raises((ServiceValidationError, vol.Invalid)):
+            await hass.services.async_call(
+                DOMAIN,
+                "set_override",
+                {
+                    "config_entry_id": entry.entry_id,
+                    "room": climate,
+                    "temperature": 23,
+                    "minutes": minutes,
+                },
+                blocking=True,
+            )
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_service_registration_once_and_apply_now_dispatch(hass, mqtt_mock):
+    from unittest.mock import patch
+
+    from custom_components.central_heating import async_setup
+
+    entry, room, climate = await setup_entry(hass)
+    with patch.object(type(hass.services), "async_register") as register:
+        assert await async_setup(hass, {})
+        register.assert_not_called()
+    with patch.object(entry.runtime_data, "async_recalculate") as recalculate:
+        await hass.services.async_call(
+            DOMAIN, "apply_now", {"config_entry_id": entry.entry_id}, blocking=True
+        )
+        recalculate.assert_awaited_once_with(apply_rooms=True, force=True)
+    await hass.config_entries.async_unload(entry.entry_id)

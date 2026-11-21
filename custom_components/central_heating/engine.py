@@ -1,6 +1,7 @@
-"""Per-entry boiler recalculation and lifecycle; room control follows in PR 2b."""
+"""Boiler control with independent, trigger-driven room synchronization."""
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -16,6 +17,8 @@ from .boiler.base import BoilerAdapter, BoilerCommand
 from .demand import DemandResult, TRVReading, calculate_demand
 from .smoothing import SmoothingInput, SmoothingState, smooth
 from .storage import HeatingStore, Mode
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HeatingEngine:
@@ -38,6 +41,7 @@ class HeatingEngine:
         self._last_source_tick: float | None = None
         self._smoothing = SmoothingState()
         self._lock = asyncio.Lock()
+        self._room_lock = asyncio.Lock()
         self._listeners: set[Callable[[], None]] = set()
         self._unsubscribers: list[Callable[[], None]] = []
         self._state_unsubscribe: Callable[[], None] | None = None
@@ -63,7 +67,7 @@ class HeatingEngine:
         )
         self._watch_trvs()
         if self.hass.state is CoreState.running:
-            await self.async_recalculate()
+            await self.async_recalculate(apply_rooms=True)
         else:
             self._unsubscribers.append(
                 self.hass.bus.async_listen(EVENT_HOMEASSISTANT_STARTED, self._started)
@@ -78,17 +82,24 @@ class HeatingEngine:
         )
 
     async def _started(self, event: Event) -> None:
-        await self.async_recalculate()
+        await self.async_recalculate(apply_rooms=True)
 
     async def _tick(self, now: datetime) -> None:
         await self.async_recalculate()
 
     async def _trv_changed(self, event: Event) -> None:
-        if self.rooms is not None:
-            async with self._lock:
-                if not self._stopped:
-                    await self.rooms.async_changed(event)
+        # Boiler always runs first, independently of room failures and radio calls.
         await self.async_recalculate()
+        if self.rooms is not None and self.hass.state is CoreState.running:
+            async with self._room_lock:
+                if not self._stopped:
+                    try:
+                        room_id = await self.rooms.async_changed(event)
+                        if room_id is not None:
+                            await self.rooms.async_apply(room_id=room_id)
+                    except Exception:
+                        _LOGGER.exception("Central Heating room state handling failed")
+            self._notify()
 
     async def _shutdown(self, event: Event) -> None:
         self._shutting_down = True
@@ -110,7 +121,7 @@ class HeatingEngine:
             if unloading and not self._shutting_down and not self.store.data.shadow:
                 await self.adapter.async_stop(unloading=True)
 
-    async def async_recalculate(self) -> None:
+    async def async_recalculate(self, *, apply_rooms: bool = False, force: bool = False) -> None:
         async with self._lock:
             if self._stopped or self._shutting_down or self.hass.state is not CoreState.running:
                 return
@@ -118,8 +129,7 @@ class HeatingEngine:
             mode = self.store.data.mode
             if mode.until is not None and mode.until.astimezone(UTC) <= now:
                 await self.store.async_update(lambda data: replace(data, mode=Mode("auto")))
-            if self.rooms is not None:
-                await self.rooms.async_apply()
+                apply_rooms = True
             readings = []
             for room in self.store.data.rooms:
                 if not room.enabled:
@@ -132,7 +142,9 @@ class HeatingEngine:
                         readings.append(
                             TRVReading(
                                 state.attributes.get("current_temperature"),
-                                state.attributes.get("temperature"),
+                                state.attributes.get("temperature")
+                                if state.state != "off"
+                                else None,
                             )
                         )
             settings = self.store.data.settings
@@ -163,13 +175,22 @@ class HeatingEngine:
                         self.last_sent = now
             self._notify()
 
+        if apply_rooms and self.rooms is not None:
+            async with self._room_lock:
+                if not self._stopped and self.hass.state is CoreState.running:
+                    try:
+                        await self.rooms.async_apply(force=force)
+                    except Exception:
+                        _LOGGER.exception("Central Heating room application failed")
+            self._notify()
+
     async def async_set_mode(self, value: str, until: datetime | None = None) -> None:
         async with self._lock:
             try:
                 await self.store.async_update(lambda data: replace(data, mode=Mode(value, until)))
             except ValueError as exc:
                 raise ServiceValidationError(str(exc)) from exc
-        await self.async_recalculate()
+        await self.async_recalculate(apply_rooms=True)
 
     async def async_set_shadow(self, enabled: bool) -> None:
         async with self._lock:
@@ -184,8 +205,8 @@ class HeatingEngine:
                 await self.store.async_settings(**changes)
             except ValueError as exc:
                 raise ServiceValidationError(str(exc)) from exc
-        await self.async_recalculate()
+        await self.async_recalculate(apply_rooms=True)
 
     async def async_data_changed(self) -> None:
         self._watch_trvs()
-        await self.async_recalculate()
+        await self.async_recalculate(apply_rooms=True)

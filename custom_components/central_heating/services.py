@@ -5,6 +5,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .storage import MODES
@@ -22,7 +23,7 @@ SCHEMAS = {
             vol.Required("config_entry_id"): str,
             vol.Required("room"): cv.entity_id,
             vol.Required("temperature"): vol.Coerce(float),
-            vol.Optional("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=10080)),
         }
     ),
     "clear_override": vol.Schema(
@@ -40,7 +41,10 @@ def async_register_services(hass):
         engine = entry.runtime_data
         try:
             if call.service == "set_mode":
-                await engine.async_set_mode(call.data["mode"], call.data.get("until"))
+                until = call.data.get("until")
+                if until is not None and until.tzinfo is None:
+                    until = until.replace(tzinfo=dt_util.get_default_time_zone())
+                await engine.async_set_mode(call.data["mode"], until)
                 return
             if call.service in ("set_override", "clear_override"):
                 entity = er.async_get(hass).async_get(call.data["room"])
@@ -56,14 +60,14 @@ def async_register_services(hass):
                 )
                 if room is None:
                     raise ValueError("Unknown room climate")
-                async with engine._lock:
+                async with engine._room_lock:
                     if call.service == "set_override":
                         await engine.rooms.async_set_override(
                             room.id, call.data["temperature"], call.data.get("minutes")
                         )
                     else:
                         await engine.rooms.async_clear_override(room.id)
-            await engine.async_recalculate()
+            await engine.async_recalculate(apply_rooms=True, force=call.service == "apply_now")
         except (ValueError, KeyError) as exc:
             raise ServiceValidationError(str(exc)) from exc
 

@@ -221,43 +221,57 @@ uses its first occurrence.
 
 - `away` can have an `until` time; when it passes, the mode returns to `auto`.
 - The mode is a `select` entity, and is also set through the card or a service.
+- A service `until` without an offset (from the date picker) is interpreted in HA’s configured local time zone.
+- Knob changes create overrides only in `auto` and `away`; in `summer` and `manual` they are neither stored
+  nor immediately reverted. Summer reapplies frost at the next room trigger.
 
 ### 6.3 Applying targets to TRVs
 - **Desired target for a room:** given by the mode table in §6.2. In `manual` mode there's none.
-- **Re-evaluate all rooms:**
+- **Re-apply only on these triggers:**
   - at every block start of any profile in use (`async_track_point_in_time` on the next start, then reschedule);
   - when the mode changes;
   - when an override is set, cleared or expires;
   - when rooms, profiles or settings are saved;
-  - once after Home Assistant has started.
-- **Writing:** for each TRV whose target differs from the desired one, call `climate.set_temperature` with
-  `temperature`. Add `hvac_mode: heat` only if the TRV is in another mode and lists `heat` among its modes. Write
-  only on a difference, because radio TRVs have limited bandwidth.
-- **Record our writes:** keep `last_commanded[trv] = (target, time, context)`, and use our own `Context` for writes.
-- **Retry:** 300 s after a write (a setting, `retry_seconds`, because battery TRVs can be slow to report), if the TRV
-  still shows a different target and nothing else changed it, write again. Retry at most 3 times. After that, set `sync_problem` on the room's attributes, log a warning, and raise a
-  Repairs issue that clears itself on the next successful sync.
-- **TRV back online:** when a TRV goes from `unavailable` or `unknown` to available, re-apply its room's desired
-  target.
+  - once after Home Assistant has started;
+  - when a TRV comes back online (apply its room);
+  - on the retry timers below.
+  The 10 s tick and ordinary TRV state events recalculate the boiler, without applying room targets.
+- **Writing:** gated on `CoreState.running`. For each TRV whose target differs, call
+  `climate.set_temperature` with `temperature`. Add `hvac_mode: heat` only if it is in another mode and supports
+  heat. A TRV deliberately switched off stays off until the next room trigger; then restore heat if supported,
+  even when its target is already equal. While off it does not contribute to demand.
+- **Boiler isolation:** calculate/send the boiler first. Room failures cannot skip that update. TRV service calls
+  use `blocking=False`, outside the boiler lock; confirmation and retry logic handles slow radio devices.
+- **Pending commands:** per TRV retain unconfirmed `(value, time, previous value)` commands, with our own Context
+  on service calls. `last_commanded` is diagnostics only. See §6.4 for confirmation.
+- **Retry:** after `retry_seconds` (default 300 s), check the desired target is unchanged and no foreign change
+  occurred. Retry at most 3 times. After the fourth retry interval (the retry window), clear unconfirmed
+  commands, set `sync_problem`, log a warning, and raise a Repairs issue. Successful synchronization clears it.
+- **TRV back online:** when a TRV goes from `unavailable` or `unknown` to available, re-apply its room.
+- **`apply_now`:** a manual retry in writing modes: rewrite every available TRV, including already-correct,
+  pending and problem TRVs, reset retry counters and clear previous repair issues. Manual mode writes nothing.
 
 ### 6.4 Overrides
 - **From the card or a service:** a target, plus either `next_block` (until the room's next target change) or a
   number of minutes. "Until the next change" means the next effective block start whose target differs from
   the currently scheduled target, skipping equal-target blocks across midnight and days. If the entire week
   has one target, the override expires after seven elapsed days. The stored `next_block` option keeps its name.
-- **From a TRV knob:** a TRV target change to a value that differs from `last_commanded` becomes an override, using
-  `settings.override_default`. If `sync_rooms_on_knob_change` is on, the other TRVs in that room get the same
-  target.
-  - **Decide by value, not context.** Battery and radio TRVs often report a commanded change minutes later, after
-    Home Assistant's context window has expired, so the state change no longer carries our context. A report equal
-    to `last_commanded` is ours, whatever its context.
+- **From a TRV knob, only in auto/away:**
+  - A report equal to any pending command is ours regardless of context. Confirm it and drop that command and
+    all older commands; retain any newer unconfirmed commands.
+  - A report equal to a value from before a still-pending command is stale/optimistic: ignore it. A real knob
+    turn back to that old value inside the retry window is indistinguishable and gets corrected by the retry.
+  - Any other target change is a knob change. Round to 0.5 and clamp to 5–30. If it equals the room target
+    without an override (profile in auto, away temperature in away), clear the override; otherwise create or
+    update it with `settings.override_default`. With `sync_rooms_on_knob_change` on, apply it to the other TRVs.
+  - Confirmed commands and commands outside the retry window never mask later knob changes.
 - **Expiry:** an override expires at its `until`, or when it's cleared, or when the room's profile changes. The
   room then goes back to the desired target.
-- **Manual mode:** knob changes are not tracked as overrides, because nothing is scheduled.
+- **Summer/manual:** knob changes are not tracked or immediately reverted.
 
 ## 7. Entities
 
-All unique IDs are `<entry_id>_<key>`. Entity names are translated; there are no hard-coded entity IDs.
+All unique IDs are `<entry_id>_<key>`. Boiler entity names are translated; room names come from the Store; there are no hard-coded entity IDs.
 
 | Platform | Entity | Notes |
 |---|---|---|
@@ -269,7 +283,10 @@ All unique IDs are `<entry_id>_<key>`. Entity names are translated; there are no
 | `number` | frost temperature, hysteresis, away temperature | write to `settings` |
 
 The room attributes `next_change` and `next_target` describe the next effective target change from §6.4,
-not merely the next block start; both are absent when the schedule has no target change.
+not merely the next block start; both are `None` when the schedule has no target change. `override_until` is `None` unless an unexpired override
+applies in the current mode. Room climates accept `set_hvac_mode(heat)` as a no-op and reject off-grid targets
+with `ServiceValidationError`. A small feature-detected property bridge uses the native-temperature API in
+2026.11 and the original API in 2026.10, without triggering 2026.11 deprecations.
 
 **Diagnostics:** settings, rooms, profiles, mode, overrides, the last command and the timing of sends. No
 credentials are involved.
@@ -283,7 +300,10 @@ credentials are involved.
 | `set_mode` | `mode`, optional `until` (`away` only) |
 | `set_override` | `room` (a room's climate entity), `temperature`, optional `minutes` (otherwise the default) |
 | `clear_override` | `room` |
-| `apply_now` | none. It re-evaluates and writes all rooms. |
+| `apply_now` | none. Manual retry: rewrites all rooms in a writing mode and resets retries. |
+
+Services are registered once in `async_setup` and resolve the loaded config entry on every call.
+Override `minutes` accepts 1–10080. Every field has a translated name and description.
 
 **Websocket commands.** Writes need an admin user; reads need any logged-in user.
 
@@ -419,10 +439,7 @@ Each pull request includes its tests and passing CI. Each is reviewed independen
 2. **Engine and boiler** (split for independent review):
    - **2a:** config/options flow, Store, boiler engine/adapter, shadow, mode select and boiler measurements/numbers;
    - **2b:** room climates/control, overrides, retries, services and diagnostics;
-   - the config flow, Store, engine, the DIYLESS adapter, shadow mode and the mode select;
-   - the sensors, binary sensor, numbers and room climates;
-   - the services and diagnostics;
-   - the integration tests.
+   - each part includes its own integration tests and independently passing CI.
 3. **Websocket API and card, part 1:** the API, the bundling and loading, and the Overview, Rooms and Settings
    tabs.
 4. **Card, part 2:** the Schedules tab and its week-grid editor.

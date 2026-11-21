@@ -10,6 +10,8 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 from .demand import TRVReading, available_temperature, calculate_demand
 from .entity import HeatingEntity
@@ -34,7 +36,9 @@ class RoomClimate(HeatingEntity, ClimateEntity):
     _attr_hvac_mode = HVACMode.HEAT
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
     _enable_turn_on_off_backwards_compatibility = False
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+    if not hasattr(ClimateEntity, "native_temperature_unit"):
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_min_temp = 5
     _attr_max_temp = 30
     _attr_target_temperature_step = 0.5
@@ -42,6 +46,7 @@ class RoomClimate(HeatingEntity, ClimateEntity):
     def __init__(self, entry, room_id):
         super().__init__(entry, f"room_{room_id}")
         self.room_id = room_id
+        self._attr_translation_key = None
 
     @property
     def room(self):
@@ -66,19 +71,19 @@ class RoomClimate(HeatingEntity, ClimateEntity):
                     readings.append(
                         TRVReading(
                             state.attributes.get("current_temperature"),
-                            state.attributes.get("temperature"),
+                            state.attributes.get("temperature") if state.state != "off" else None,
                         )
                     )
         return readings
 
     @property
-    def current_temperature(self):
+    def native_current_temperature(self):
         values = [available_temperature(reading.current) for reading in self._readings()]
         values = [value for value in values if value is not None]
         return round(mean(values), 2) if values else None
 
     @property
-    def target_temperature(self):
+    def native_target_temperature(self):
         if self.room is None:
             return None
         desired = self.engine.rooms.desired(self.room)
@@ -87,6 +92,11 @@ class RoomClimate(HeatingEntity, ClimateEntity):
         values = [available_temperature(reading.target) for reading in self._readings()]
         values = [value for value in values if value is not None]
         return round(mean(values), 2) if values else None
+
+    # 2026.11 renamed these properties; retain the 2026.10 API only on that release.
+    if not hasattr(ClimateEntity, "native_current_temperature"):
+        current_temperature = native_current_temperature
+        target_temperature = native_target_temperature
 
     @property
     def hvac_action(self):
@@ -101,7 +111,13 @@ class RoomClimate(HeatingEntity, ClimateEntity):
             return {}
         plan = self.engine.rooms.schedule(self.room)
         override = next(
-            (item for item in self.engine.store.data.overrides if item.room_id == self.room_id),
+            (
+                item
+                for item in self.engine.store.data.overrides
+                if item.room_id == self.room_id
+                and item.until > dt_util.utcnow()
+                and self.engine.store.data.mode.value in ("auto", "away")
+            ),
             None,
         )
         return {
@@ -115,9 +131,13 @@ class RoomClimate(HeatingEntity, ClimateEntity):
             "sync_problem": any(trv in self.engine.rooms.problems for trv in self.room.trvs),
         }
 
+    async def async_set_hvac_mode(self, hvac_mode):
+        if hvac_mode != HVACMode.HEAT:
+            raise ServiceValidationError("Room climates only support heat")
+
     async def async_set_temperature(self, **kwargs):
-        async with self.engine._lock:
+        async with self.engine._room_lock:
             await self.engine.rooms.async_set_override(
                 self.room_id, kwargs["temperature"], source="card"
             )
-        await self.engine.async_recalculate()
+        await self.engine.async_recalculate(apply_rooms=True)

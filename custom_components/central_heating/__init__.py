@@ -23,8 +23,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .config_flow import validate_prefix
     from .const import ADAPTER
     from .engine import HeatingEngine
-    from .storage import HeatingStore
     from .rooms import RoomController
+    from .storage import HeatingStore
 
     try:
         if entry.data["adapter"] != ADAPTER:
