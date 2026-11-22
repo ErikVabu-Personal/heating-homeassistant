@@ -12,7 +12,21 @@ const configuration: Configuration = {
   },
   mode: { value: "auto", until: null },
   shadow: true,
-  profiles: { profile_a: defaultProfile("Weekday comfort") },
+  profiles: {
+    profile_a: {
+      ...defaultProfile("Weekday comfort"),
+      days: Object.fromEntries(
+        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+          day,
+          [
+            { start: "00:00", target: 18 },
+            { start: "06:00", target: 21 },
+            { start: "22:00", target: 18 },
+          ],
+        ]),
+      ),
+    },
+  },
   rooms: {
     room_a: {
       name: "Room A",

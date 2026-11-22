@@ -633,6 +633,25 @@ class CentralHeatingCard extends i {
         this.generation = 0;
         this.connecting = false;
         this.entries = [];
+        this.tabKey = async (event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+                return;
+            event.preventDefault();
+            const index = tabs.indexOf(this.tab);
+            const next = event.key === "Home"
+                ? 0
+                : event.key === "End"
+                    ? tabs.length - 1
+                    : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+                        tabs.length;
+            this.tab = tabs[next];
+            this.editing = null;
+            this.deleting = null;
+            await this.updateComplete;
+            this.renderRoot
+                .querySelector(`#tab-${this.tab}`)
+                ?.focus();
+        };
         this.saveMode = async (event) => {
             event.preventDefault();
             const data = new FormData(event.target);
@@ -855,11 +874,12 @@ class CentralHeatingCard extends i {
             ? b `<span class="badge shadow">${shield} Shadow mode</span>`
             : A}
       </header>
-      <nav role="tablist" aria-label="Heating views">
+      <nav role="tablist" aria-label="Heating views" @keydown=${this.tabKey}>
         ${tabs.map((tab) => b `<button
               role="tab"
               id=${`tab-${tab}`}
               aria-selected=${this.tab === tab}
+              tabindex=${this.tab === tab ? 0 : -1}
               aria-controls="view"
               @click=${() => {
             this.tab = tab;

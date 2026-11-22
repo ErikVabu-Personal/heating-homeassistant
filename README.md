@@ -8,3 +8,40 @@ heating profiles and its own dashboard card.
 **Status:** development; not ready for live installation. See [`docs/DESIGN.md`](docs/DESIGN.md).
 
 Blocking tests use the supported test-package/Home Assistant pair; move that pair forward when a 2026.11.x-compatible test-package release appears.
+
+
+## Card (part 1)
+
+The integration serves the committed card bundle locally and adds it to Home Assistant once, including with
+multiple boiler entries. Add a **Central Heating** custom card in the dashboard editor and pick the boiler.
+Manual YAML is also supported:
+
+```yaml
+type: custom:central-heating-card
+config_entry_id: YOUR_CONFIG_ENTRY_ID
+```
+
+Overview shows computed boiler demand and shadow mode, room targets, overrides and synchronization problems.
+Rooms edits physical thermostats and profiles; Settings edits tuning, retries and shadow. Schedule profiles are
+listed now; the week-grid editor is a separate next PR. Logged-in users can read; only administrators can write.
+Shadow pauses boiler output, while manual mode pauses room writes.
+
+### Review without Home Assistant
+
+Open `frontend/demo/index.html` directly in a browser. Its committed `demo.js` contains the card, invented
+Room A/Room B data and an in-memory websocket mock. Nothing is sent to Home Assistant or an external service.
+The preview controls switch between 1080 px and 390 px layouts and light/dark HA theme variables. Demo changes
+are temporary; Reset restores the fixtures.
+
+```sh
+cd frontend
+npm ci
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+Dependencies are pinned by `package-lock.json`. CI uses the existing checksum-verified Node 22, validates both
+Python versions, runs frontend checks, rebuilds both committed bundles and rejects bundle drift. The production
+card uses HA theme variables, local SVG icons and no external fonts, scripts or style requests.

@@ -636,6 +636,25 @@
             this.generation = 0;
             this.connecting = false;
             this.entries = [];
+            this.tabKey = async (event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+                    return;
+                event.preventDefault();
+                const index = tabs.indexOf(this.tab);
+                const next = event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                        ? tabs.length - 1
+                        : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+                            tabs.length;
+                this.tab = tabs[next];
+                this.editing = null;
+                this.deleting = null;
+                await this.updateComplete;
+                this.renderRoot
+                    .querySelector(`#tab-${this.tab}`)
+                    ?.focus();
+            };
             this.saveMode = async (event) => {
                 event.preventDefault();
                 const data = new FormData(event.target);
@@ -858,11 +877,12 @@
             ? b `<span class="badge shadow">${shield} Shadow mode</span>`
             : A}
       </header>
-      <nav role="tablist" aria-label="Heating views">
+      <nav role="tablist" aria-label="Heating views" @keydown=${this.tabKey}>
         ${tabs.map((tab) => b `<button
               role="tab"
               id=${`tab-${tab}`}
               aria-selected=${this.tab === tab}
+              tabindex=${this.tab === tab ? 0 : -1}
               aria-controls="view"
               @click=${() => {
             this.tab = tab;
@@ -1578,7 +1598,19 @@
         },
         mode: { value: "auto", until: null },
         shadow: true,
-        profiles: { profile_a: defaultProfile("Weekday comfort") },
+        profiles: {
+            profile_a: {
+                ...defaultProfile("Weekday comfort"),
+                days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+                    day,
+                    [
+                        { start: "00:00", target: 18 },
+                        { start: "06:00", target: 21 },
+                        { start: "22:00", target: 18 },
+                    ],
+                ])),
+            },
+        },
         rooms: {
             room_a: {
                 name: "Room A",
@@ -1653,20 +1685,36 @@
         for (const [id, room] of Object.entries(status.configuration.rooms)) {
             const override = status.configuration.overrides[id];
             const old = status.rooms[id];
-            const target = override?.target ?? 18;
+            const mode = status.configuration.mode.value;
+            const activeOverride = mode === "auto" || mode === "away" ? override : undefined;
+            const target = mode === "manual"
+                ? (old?.target ?? Object.values(old?.trvs ?? {})[0] ?? 18)
+                : mode === "summer"
+                    ? status.configuration.settings.frost_temperature
+                    : (activeOverride?.target ??
+                        (mode === "away"
+                            ? status.configuration.settings.away_temperature
+                            : 21));
             status.rooms[id] = {
                 ...old,
                 name: room.name,
                 current: old?.current ?? 18,
-                desired: target,
+                desired: mode === "manual" ? null : target,
+                target,
                 trvs: Object.fromEntries(room.trvs.map((trv) => [trv, target])),
-                demanding: old?.demanding ?? false,
+                demanding: room.enabled &&
+                    target - (old?.current ?? 18) >
+                        status.configuration.settings.hysteresis,
                 sync_problem: old?.sync_problem ?? false,
-                override_until: override?.until ?? null,
+                override_until: activeOverride?.until ?? null,
                 next_change: old?.next_change ?? null,
                 next_target: old?.next_target ?? null,
             };
         }
+        status.global.demand_count = Object.values(status.rooms).filter((room) => room.demanding).length;
+        status.global.command.heat =
+            status.global.demand_count > 0 &&
+                status.configuration.mode.value !== "summer";
     }
     function respond(message) {
         const command = message.type.replace("central_heating/", "");
@@ -1690,7 +1738,10 @@
             const room = String(message.room_id);
             status.configuration.overrides[room] = {
                 target: Number(message.temperature),
-                until: new Date(Date.now() + Number(message.minutes ?? 120) * 60000).toISOString(),
+                until: message.kind === "next_block"
+                    ? (status.rooms[room].next_change ??
+                        new Date(Date.now() + 7 * 86400000).toISOString())
+                    : new Date(Date.now() + Number(message.minutes ?? 120) * 60000).toISOString(),
                 source: "card",
             };
         }

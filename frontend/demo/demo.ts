@@ -14,20 +14,41 @@ function recalculate() {
   for (const [id, room] of Object.entries(status.configuration.rooms)) {
     const override = status.configuration.overrides[id];
     const old = status.rooms[id];
-    const target = override?.target ?? 18;
+    const mode = status.configuration.mode.value;
+    const activeOverride =
+      mode === "auto" || mode === "away" ? override : undefined;
+    const target =
+      mode === "manual"
+        ? (old?.target ?? Object.values(old?.trvs ?? {})[0] ?? 18)
+        : mode === "summer"
+          ? status.configuration.settings.frost_temperature
+          : (activeOverride?.target ??
+            (mode === "away"
+              ? status.configuration.settings.away_temperature
+              : 21));
     status.rooms[id] = {
       ...old,
       name: room.name,
       current: old?.current ?? 18,
-      desired: target,
+      desired: mode === "manual" ? null : target,
+      target,
       trvs: Object.fromEntries(room.trvs.map((trv) => [trv, target])),
-      demanding: old?.demanding ?? false,
+      demanding:
+        room.enabled &&
+        target - (old?.current ?? 18) >
+          status.configuration.settings.hysteresis,
       sync_problem: old?.sync_problem ?? false,
-      override_until: override?.until ?? null,
+      override_until: activeOverride?.until ?? null,
       next_change: old?.next_change ?? null,
       next_target: old?.next_target ?? null,
     };
   }
+  status.global.demand_count = Object.values(status.rooms).filter(
+    (room) => room.demanding,
+  ).length;
+  status.global.command.heat =
+    status.global.demand_count > 0 &&
+    status.configuration.mode.value !== "summer";
 }
 function respond(message: Message): unknown {
   const command = message.type.replace("central_heating/", "");
@@ -50,9 +71,13 @@ function respond(message: Message): unknown {
     const room = String(message.room_id);
     status.configuration.overrides[room] = {
       target: Number(message.temperature),
-      until: new Date(
-        Date.now() + Number(message.minutes ?? 120) * 60000,
-      ).toISOString(),
+      until:
+        message.kind === "next_block"
+          ? (status.rooms[room].next_change ??
+            new Date(Date.now() + 7 * 86400000).toISOString())
+          : new Date(
+              Date.now() + Number(message.minutes ?? 120) * 60000,
+            ).toISOString(),
       source: "card",
     };
   } else if (command === "override/clear")

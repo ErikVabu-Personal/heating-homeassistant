@@ -479,8 +479,9 @@ Each pull request includes its tests and passing CI. Each is reviewed independen
    - **2a:** config/options flow, Store, boiler engine/adapter, shadow, mode select and boiler measurements/numbers;
    - **2b:** room climates/control, overrides, retries, services and diagnostics;
    - each part includes its own integration tests and independently passing CI.
-3. **Websocket API and card, part 1:** the API, the bundling and loading, and the Overview, Rooms and Settings
-   tabs.
+3. **Websocket API and card, part 1** (split for independent review):
+   - **3a:** the complete authenticated websocket API, admin writes, profiles and subscriptions;
+   - **3b:** bundling/loading, Overview, Rooms and Settings, a profile-list placeholder and offline demo.
 4. **Card, part 2:** the Schedules tab and its week-grid editor.
 5. **Polish:** translations, README (installation, set-up, migration), Repairs issues, and an end-to-end check
    against a real Home Assistant.

@@ -127,4 +127,15 @@ describe("card lifecycle and safety", () => {
     expect(card.shadowRoot!.textContent).toContain("Target 19°");
     expect(card.shadowRoot!.querySelector("fieldset")!.disabled).toBe(true);
   });
+  it("moves focus between tabs with arrow keys", async () => {
+    const card = await mount(mocked().hass);
+    card
+      .shadowRoot!.querySelector("nav")!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    await settle(card);
+    expect(card.tab).toBe("Rooms");
+    expect(card.shadowRoot!.activeElement?.id).toBe("tab-Rooms");
+  });
 });
