@@ -23,11 +23,13 @@ def __getattr__(name: str):
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    from .frontend import async_register_card
     from .services import async_register_services
     from .websocket import async_register_websocket
 
     async_register_services(hass)
     async_register_websocket(hass)
+    await async_register_card(hass)
     return True
 
 

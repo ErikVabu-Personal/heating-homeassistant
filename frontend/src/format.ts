@@ -1,0 +1,4 @@
+export function temperature(value:number|null|undefined):string{return value==null||!Number.isFinite(value)?'—':`${new Intl.NumberFormat(undefined,{maximumFractionDigits:1}).format(value)}°`;}
+export function time(value:string|null|undefined):string{return value?new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date(value)):'—';}
+export function localDateTime(value:string|null):string {if(!value)return '';const d=new Date(value);const pad=(n:number)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
+export function defaultProfile(name='Default profile'):{name:string;days:Record<string,{start:string;target:number}[]>}{return {name,days:Object.fromEntries(['mon','tue','wed','thu','fri','sat','sun'].map(day=>[day,[{start:'00:00',target:18}]]))};}
