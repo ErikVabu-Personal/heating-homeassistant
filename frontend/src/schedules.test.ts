@@ -12,8 +12,8 @@ async function mount() {
   editors.push(e);
   e.status = fixture();
   e.writable = true;
-  e.saveProfile = vi.fn().mockResolvedValue("profile_a");
-  e.deleteProfile = vi.fn().mockResolvedValue(undefined);
+  e.saveSchedule = vi.fn().mockResolvedValue("winter");
+  e.deleteSchedule = vi.fn().mockResolvedValue(undefined);
   document.body.append(e);
   await tick(e);
   return e;
@@ -57,16 +57,20 @@ afterEach(() => {
 });
 it("holds local edits during status pushes, saves explicitly and preserves payload identity", async () => {
   const e = await mount();
-  input(e, "#profile-name", "Profile renamed", "input");
+  input(e, "#schedule-name", "Week renamed", "input");
   await tick(e);
   expect(e.dirty).toBe(true);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
   e.status = fixture();
   await tick(e);
-  expect(e.draft!.name).toBe("Profile renamed");
-  button(e, "Save profile").click();
+  expect(e.draft!.name).toBe("Week renamed");
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).toHaveBeenCalledWith({ ...e.draft, id: "profile_a" });
+  expect(e.saveSchedule).toHaveBeenCalledWith({
+    name: "Week renamed",
+    rooms: {},
+    id: "winter",
+  });
   expect(e.dirty).toBe(false);
 });
 it("keyboard edits targets, boundary arrows snap times, and never saves on edits", async () => {
@@ -76,14 +80,14 @@ it("keyboard edits targets, boundary arrows snap times, and never saves on edits
     new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
   );
   await tick(e);
-  expect(e.draft!.days.mon[0].target).toBe(18.5);
+  expect(e.week.days.mon[0].target).toBe(18.5);
   const handle = e.shadowRoot!.querySelector<HTMLButtonElement>(".boundary")!;
   handle.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
   );
   await tick(e);
-  expect(e.draft!.days.mon[1].start).toBe("06:05");
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.week.days.mon[1].start).toBe("06:05");
+  expect(e.saveSchedule).not.toHaveBeenCalled();
 });
 it("pointer dragging moves a boundary on the snapped grid", async () => {
   const e = await mount();
@@ -100,8 +104,8 @@ it("pointer dragging moves a boundary on the snapped grid", async () => {
   handle.dispatchEvent(pointer("pointermove", 424));
   handle.dispatchEvent(pointer("pointerup", 424));
   await tick(e);
-  expect(e.draft!.days.mon[1].start).toBe("07:05");
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.week.days.mon[1].start).toBe("07:05");
+  expect(e.saveSchedule).not.toHaveBeenCalled();
 });
 it("copies checked days in the draft and leaves unchecked days untouched", async () => {
   const e = await mount();
@@ -117,53 +121,56 @@ it("copies checked days in the draft and leaves unchecked days untouched", async
     new Event("submit", { bubbles: true, cancelable: true }),
   );
   await tick(e);
-  expect(e.draft!.days.sat).toEqual(e.draft!.days.mon);
-  expect(e.draft!.days.sun[1].start).toBe("08:00");
+  expect(e.week.days.sat).toEqual(e.week.days.mon);
+  expect(e.week.days.sun[1].start).toBe("08:00");
   expect(e.dirty).toBe(true);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
 });
 it("shows schedule and API validation inline without discarding edits", async () => {
   const e = await mount();
   input(e, "#target-mon-0", "20.25");
   await tick(e);
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
   expect(e.shadowRoot!.querySelector("[role=alert]")!.textContent).toContain(
     "0.5",
   );
   input(e, "#target-mon-0", "20.5");
-  e.saveProfile = vi
+  e.saveSchedule = vi
     .fn()
-    .mockRejectedValue(new Error("API validation: profile conflict"));
+    .mockRejectedValue(new Error("API validation: week conflict"));
   await tick(e);
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
   expect(e.shadowRoot!.querySelector("[role=alert]")!.textContent).toContain(
     "API validation",
   );
   expect(e.dirty).toBe(true);
 });
-it("creates and copies new identities, discards safely, and shows room references on refused deletion", async () => {
+it("refuses active deletion and creates a copied schedule as a new unsaved identity", async () => {
   const e = await mount();
-  button(e, "Delete profile").click();
-  await tick(e);
-  expect(e.shadowRoot!.querySelector(".delete-confirm")!.textContent).toContain(
-    "Room A, Room B",
+  expect(button(e, "Delete").disabled).toBe(true);
+  expect(e.shadowRoot!.querySelector("#delete-reason")!.textContent).toContain(
+    "active schedule",
   );
-  expect(
-    [...e.shadowRoot!.querySelectorAll("button")].some((b) =>
-      b.textContent?.includes("Confirm delete"),
-    ),
-  ).toBe(false);
-  button(e, "Keep profile").click();
-  button(e, "Copy profile").click();
+  button(e, "Create").click();
+  await tick(e);
+  const name =
+    e.shadowRoot!.querySelector<HTMLInputElement>("#new-schedule-name")!;
+  name.value = "Autumn copy";
+  name.form!.dispatchEvent(
+    new Event("submit", { bubbles: true, cancelable: true }),
+  );
   await tick(e);
   expect(e.selected).toBe("");
-  expect(e.draft!.name).toBe("Profile A copy");
-  button(e, "Save profile").click();
+  expect(e.draft!.name).toBe("Autumn copy");
+  expect(e.draft!.rooms).toEqual(
+    e.status!.configuration.schedules.winter.rooms,
+  );
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).toHaveBeenCalledWith(
+  expect(e.saveSchedule).toHaveBeenCalledWith(
     expect.not.objectContaining({ id: expect.anything() }),
   );
 });
@@ -171,38 +178,38 @@ it("narrow list supports time, temperature, add/remove and discarding without wr
   const e = await mount();
   input(e, "#start-mon-1", "07:15");
   await tick(e);
-  expect(e.draft!.days.mon[1].start).toBe("07:15");
+  expect(e.week.days.mon[1].start).toBe("07:15");
   expect(
     e.shadowRoot!.querySelector<HTMLInputElement>("#start-mon-0")!.disabled,
   ).toBe(true);
   button(e, "Add block").click();
   await tick(e);
-  expect(e.draft!.days.mon.at(-1)!.start).toBe("22:05");
+  expect(e.week.days.mon.at(-1)!.start).toBe("22:05");
   input(e, "#target-mon-1", "22.5");
   await tick(e);
-  expect(e.draft!.days.mon[1].target).toBe(22.5);
+  expect(e.week.days.mon[1].target).toBe(22.5);
   const remove = [
     ...e.shadowRoot!.querySelectorAll<HTMLButtonElement>(".block-row button"),
   ][1];
   remove.click();
   await tick(e);
-  expect(e.draft!.days.mon.some((b) => b.start === "07:15")).toBe(false);
+  expect(e.week.days.mon.some((b) => b.start === "07:15")).toBe(false);
   button(e, "Discard changes").click();
   await tick(e);
   expect(e.dirty).toBe(false);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
 });
 it("clears a draft on entry change and refuses save when read-only", async () => {
   const e = await mount();
-  input(e, "#profile-name", "Draft", "input");
+  input(e, "#schedule-name", "Draft", "input");
   await tick(e);
   e.status = { ...fixture(), config_entry_id: "other" };
   await tick(e);
   expect(e.dirty).toBe(false);
-  expect(e.draft!.name).toBe("Profile A");
+  expect(e.draft!.name).toBe("Winter");
   e.writable = false;
   await tick(e);
-  expect(button(e, "Save profile").disabled).toBe(true);
+  expect(button(e, "Save schedule").disabled).toBe(true);
 });
 
 it("uses HA's time format for editable starts and blocks saving an invalid raw time", async () => {
@@ -215,17 +222,17 @@ it("uses HA's time format for editable starts and blocks saving an invalid raw t
     e.shadowRoot!.querySelector<HTMLInputElement>("#start-mon-0")!.value,
   ).toBe("00:00");
   input(e, "#start-mon-1", "07:13");
-  input(e, "#profile-name", "Renamed", "input");
+  input(e, "#schedule-name", "Renamed", "input");
   await tick(e);
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
   expect(e.error).toContain("invalid start times");
   input(e, "#start-mon-1", "07:15");
   await tick(e);
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).toHaveBeenCalled();
+  expect(e.saveSchedule).toHaveBeenCalled();
   e.hass = {
     locale: { language: "en-US", time_format: "12" },
   } as import("./types").Hass;
@@ -235,7 +242,7 @@ it("uses HA's time format for editable starts and blocks saving an invalid raw t
   ).toContain("AM");
   input(e, "#start-mon-1", "08:15 AM");
   await tick(e);
-  expect(e.draft!.days.mon[1].start).toBe("08:15");
+  expect(e.week.days.mon[1].start).toBe("08:15");
 });
 
 it.each(["list", "block"])(
@@ -255,36 +262,36 @@ it.each(["list", "block"])(
     const id = editor === "list" ? "#start-mon-3" : "#block-start";
     input(e, id, "23:00");
     await tick(e);
-    expect(e.draft!.days.mon[3].start).toBe("17:00");
+    expect(e.week.days.mon[3].start).toBe("17:00");
     expect(e.error).toContain("must be after 09:00 and before 22:00");
-    button(e, "Save profile").click();
+    button(e, "Save schedule").click();
     await tick(e);
-    expect(e.saveProfile).not.toHaveBeenCalled();
+    expect(e.saveSchedule).not.toHaveBeenCalled();
     input(e, id, "05:00");
     await tick(e);
-    expect(e.draft!.days.mon[3].start).toBe("17:00");
+    expect(e.week.days.mon[3].start).toBe("17:00");
     expect(e.error).toContain("must be after 09:00 and before 22:00");
     input(e, id, "18:05");
     await tick(e);
-    expect(e.draft!.days.mon[3].start).toBe("18:05");
-    button(e, "Save profile").click();
+    expect(e.week.days.mon[3].start).toBe("18:05");
+    button(e, "Save schedule").click();
     await tick(e);
-    expect(e.saveProfile).toHaveBeenCalled();
+    expect(e.saveSchedule).toHaveBeenCalled();
   },
 );
 it("removing a rejected row clears its remembered input and allows saving other changes", async () => {
   const e = await mount();
-  input(e, "#profile-name", "Keep this edit", "input");
+  input(e, "#schedule-name", "Keep this edit", "input");
   input(e, "#start-mon-3", "nonsense");
   await tick(e);
   e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
     "details:first-of-type .block-row button",
   )[3].click();
   await tick(e);
-  expect(e.draft!.days.mon).toHaveLength(4);
-  button(e, "Save profile").click();
+  expect(e.week.days.mon).toHaveLength(4);
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).toHaveBeenCalledWith(
+  expect(e.saveSchedule).toHaveBeenCalledWith(
     expect.objectContaining({ name: "Keep this edit" }),
   );
   expect(e.error).toBe("");
@@ -301,18 +308,18 @@ it("removing a row above rejected text restores the correct row times and keeps 
   expect(
     e.shadowRoot!.querySelector<HTMLInputElement>("#start-mon-2")!.value,
   ).not.toBe("nonsense");
-  expect(e.draft!.days.mon[2].start).toBe("17:00");
+  expect(e.week.days.mon[2].start).toBe("17:00");
   expect(
     e.shadowRoot!.querySelector<HTMLInputElement>("#start-tue-2")!.value,
   ).toBe("invalid Tuesday");
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).not.toHaveBeenCalled();
+  expect(e.saveSchedule).not.toHaveBeenCalled();
   input(e, "#start-tue-2", "10:00");
   await tick(e);
-  button(e, "Save profile").click();
+  button(e, "Save schedule").click();
   await tick(e);
-  expect(e.saveProfile).toHaveBeenCalled();
+  expect(e.saveSchedule).toHaveBeenCalled();
 });
 it.each(["split", "copy"])(
   "%s clears rejected inputs for the structurally changed day",
@@ -336,22 +343,20 @@ it.each(["split", "copy"])(
       check.form!.dispatchEvent(
         new Event("submit", { bubbles: true, cancelable: true }),
       );
-      input(e, "#profile-name", "Copied Monday", "input");
+      input(e, "#schedule-name", "Copied Monday", "input");
     }
     await tick(e);
-    button(e, "Save profile").click();
+    button(e, "Save schedule").click();
     await tick(e);
-    expect(e.saveProfile).toHaveBeenCalled();
+    expect(e.saveSchedule).toHaveBeenCalled();
   },
 );
-it("disables profile selection for unsaved edits, including rejected typed input (E05)", async () => {
+it("disables schedule selection for unsaved edits, including rejected typed input (E05)", async () => {
   const e = await mount();
   const selector = () =>
-    e.shadowRoot!.querySelector<HTMLSelectElement>(
-      '[aria-label="Heating profile"]',
-    )!;
+    e.shadowRoot!.querySelector<HTMLSelectElement>('[aria-label="Schedule"]')!;
   expect(selector().disabled).toBe(false);
-  input(e, "#profile-name", "Renamed", "input");
+  input(e, "#schedule-name", "Renamed", "input");
   await tick(e);
   expect(selector().disabled).toBe(true);
   button(e, "Discard changes").click();
@@ -361,7 +366,7 @@ it("disables profile selection for unsaved edits, including rejected typed input
   await tick(e);
   expect(selector().disabled).toBe(true);
 });
-it("chooses next room change by absolute time through the autumn DST fold", async () => {
+it("shows the selected room’s next absolute change through the autumn DST fold", async () => {
   const e = await mount();
   e.hass = {
     config: { time_zone: "UTC" },
@@ -371,9 +376,14 @@ it("chooses next room change by absolute time through the autumn DST fold", asyn
   e.status!.rooms.room_b.next_change = "2026-10-25T02:50:00+02:00";
   e.requestUpdate();
   await tick(e);
-  expect(e.shadowRoot!.querySelector(".profile-meta")!.textContent).toContain(
-    "00:50",
-  );
+  expect(
+    e.shadowRoot!.querySelector(".week-editor .toolbar")!.textContent,
+  ).toContain("01:10");
+  button(e, "Room B").click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector(".week-editor .toolbar")!.textContent,
+  ).toContain("00:50");
 });
 it.each([
   ["24", "6:30"],
@@ -391,7 +401,7 @@ it.each([
     await tick(e);
     input(e, "#start-mon-1", value);
     await tick(e);
-    expect(e.draft!.days.mon[1].start).toBe("06:30");
+    expect(e.week.days.mon[1].start).toBe("06:30");
     expect(e.error).toBe("");
   },
 );
@@ -421,3 +431,268 @@ it.each(["12", "24"] as const)(
     expect(e.error).not.toContain("24:00");
   },
 );
+
+it("selects a whole-house schedule and a room, preserving edits in both room weeks", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "19");
+  await tick(e);
+  button(e, "Room B").click();
+  await tick(e);
+  expect(e.week.days.mon[0].target).toBe(17);
+  input(e, "#target-mon-0", "20");
+  await tick(e);
+  button(e, "Room A").click();
+  await tick(e);
+  expect(e.week.days.mon[0].target).toBe(19);
+  expect(e.draft!.rooms.room_b.days.mon[0].target).toBe(20);
+  button(e, "Save schedule").click();
+  await tick(e);
+  expect(e.saveSchedule).toHaveBeenCalledWith(
+    expect.objectContaining({
+      id: "winter",
+      rooms: expect.objectContaining({
+        room_a: expect.anything(),
+        room_b: expect.anything(),
+      }),
+    }),
+  );
+});
+it("copies only checked room weeks in the selected schedule, with independent copies and explicit saving", async () => {
+  const e = await mount();
+  const updated = structuredClone(e.status!);
+  updated.configuration.rooms.room_c = {
+    ...updated.configuration.rooms.room_b,
+    name: "Room C",
+    trvs: ["climate.trv_c"],
+  };
+  for (const schedule of Object.values(updated.configuration.schedules))
+    schedule.rooms.room_c = structuredClone(schedule.rooms.room_b);
+  e.status = updated;
+  await tick(e);
+  const unchecked = structuredClone(e.draft!.rooms.room_c);
+  input(e, "#target-mon-0", "22");
+  await tick(e);
+  button(e, "Copy this room").click();
+  await tick(e);
+  const check = e.shadowRoot!.querySelector<HTMLInputElement>(
+    "input[name=rooms][value=room_b]",
+  )!;
+  check.checked = true;
+  check.form!.dispatchEvent(
+    new Event("submit", { bubbles: true, cancelable: true }),
+  );
+  await tick(e);
+  expect(e.draft!.rooms.room_c).toEqual(unchecked);
+  expect(e.draft!.rooms.room_b).toEqual(e.draft!.rooms.room_a);
+  expect(e.saveSchedule).not.toHaveBeenCalled();
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  expect(e.draft!.rooms.room_b.days.mon[0].target).toBe(22);
+  expect(
+    e.status!.configuration.schedules.autumn.rooms.room_b.days.mon[0].target,
+  ).toBe(18);
+});
+it.each(["active", "blank"])(
+  "creates a schedule from %s with every room seeded",
+  async (source) => {
+    const e = await mount();
+    e.status!.configuration.active_schedule_id = "autumn";
+    e.requestUpdate();
+    await tick(e);
+    button(e, "Create").click();
+    await tick(e);
+    const select =
+      e.shadowRoot!.querySelector<HTMLSelectElement>("#schedule-source")!;
+    expect(select.value).toBe("autumn");
+    if (source === "blank") select.value = "";
+    const name =
+      e.shadowRoot!.querySelector<HTMLInputElement>("#new-schedule-name")!;
+    name.value = "New plan";
+    name.form!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await tick(e);
+    expect(Object.keys(e.draft!.rooms)).toEqual(["room_a", "room_b"]);
+    if (source === "active")
+      expect(e.draft!.rooms).toEqual(
+        e.status!.configuration.schedules.autumn.rooms,
+      );
+    else
+      expect(e.draft!.rooms.room_a.days.mon).toEqual([
+        { start: "00:00", target: 18 },
+      ]);
+    expect(e.saveSchedule).not.toHaveBeenCalled();
+    expect(e.dirty).toBe(true);
+  },
+);
+it("activation is explicit and blocked while unsaved; inactive schedules may be deleted", async () => {
+  const e = await mount();
+  e.activateSchedule = vi.fn().mockResolvedValue(undefined);
+  const select = e.shadowRoot!.querySelector<HTMLSelectElement>(
+    "[aria-label=Schedule]",
+  )!;
+  select.value = "autumn";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await tick(e);
+  expect(e.selected).toBe("autumn");
+  button(e, "Activate").click();
+  await tick(e);
+  expect(e.activateSchedule).toHaveBeenCalledWith("autumn");
+  input(e, "#schedule-name", "Renamed", "input");
+  await tick(e);
+  expect(button(e, "Activate").disabled).toBe(true);
+  button(e, "Discard changes").click();
+  await tick(e);
+  button(e, "Delete").click();
+  await tick(e);
+  button(e, "Confirm delete").click();
+  await tick(e);
+  expect(e.deleteSchedule).toHaveBeenCalledWith("autumn");
+});
+
+it("lets read-only users inspect other room weeks while editing and activation stay disabled", async () => {
+  const e = await mount();
+  e.writable = false;
+  await tick(e);
+  const room = button(e, "Room B");
+  expect(room.matches(":disabled")).toBe(false);
+  room.click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_b");
+  expect(e.week.days.mon[0].target).toBe(17);
+  expect(
+    e
+      .shadowRoot!.querySelector<HTMLInputElement>("#target-mon-0")!
+      .matches(":disabled"),
+  ).toBe(true);
+  expect(button(e, "Activate").disabled).toBe(true);
+  expect(button(e, "Save schedule").disabled).toBe(true);
+});
+
+it.each([false, true])(
+  "loads server-seeded added rooms while dirty=%s without inventing defaults",
+  async (dirty) => {
+    const e = await mount();
+    button(e, "Room B").click();
+    await tick(e);
+    if (dirty) {
+      input(e, "#target-mon-0", "23");
+      await tick(e);
+    }
+    const status = structuredClone(e.status!);
+    status.configuration.rooms.room_c = {
+      ...status.configuration.rooms.room_a,
+      name: "Room C",
+      trvs: ["climate.trv_c"],
+    };
+    for (const schedule of Object.values(status.configuration.schedules))
+      schedule.rooms.room_c = structuredClone(schedule.rooms.room_a);
+    e.status = status;
+    await tick(e);
+    expect(e.selectedRoom).toBe("room_b");
+    expect(e.dirty).toBe(dirty);
+    button(e, "Room C").click();
+    await tick(e);
+    expect(e.week).toEqual(status.configuration.schedules.winter.rooms.room_a);
+    if (dirty) {
+      button(e, "Save schedule").click();
+      await tick(e);
+      expect(e.saveSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({ rooms: { room_b: expect.anything() } }),
+      );
+    }
+  },
+);
+it("drops deleted rooms during unsaved edits and saves surviving edits without Discard", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  const status = structuredClone(e.status!);
+  delete status.configuration.rooms.room_b;
+  for (const schedule of Object.values(status.configuration.schedules))
+    delete schedule.rooms.room_b;
+  e.status = status;
+  await tick(e);
+  expect(e.draft!.rooms).not.toHaveProperty("room_b");
+  expect(e.dirty).toBe(true);
+  button(e, "Save schedule").click();
+  await tick(e);
+  expect(e.saveSchedule).toHaveBeenCalledWith(
+    expect.objectContaining({ rooms: { room_a: expect.anything() } }),
+  );
+  expect(e.draft!.rooms.room_a.days.mon[0].target).toBe(23);
+  expect(e.error).toBe("");
+  expect(e.dirty).toBe(false);
+});
+it.each([false, true])(
+  "preserves another device's Room A change when saving Room B, dirty=%s",
+  async (dirty) => {
+    const e = await mount();
+    button(e, "Room B").click();
+    await tick(e);
+    if (dirty) {
+      input(e, "#target-mon-0", "23");
+      await tick(e);
+    }
+    const server = structuredClone(e.status!);
+    server.configuration.schedules.winter.rooms.room_a.days.mon[0].target = 25;
+    e.status = structuredClone(server);
+    await tick(e);
+    expect(e.selectedRoom).toBe("room_b");
+    if (!dirty) {
+      expect(e.draft!.rooms.room_a.days.mon[0].target).toBe(25);
+      expect(e.dirty).toBe(false);
+      input(e, "#target-mon-0", "23");
+      await tick(e);
+    }
+    e.saveSchedule = vi.fn(async (payload) => {
+      Object.assign(server.configuration.schedules.winter.rooms, payload.rooms);
+      return "winter";
+    });
+    button(e, "Save schedule").click();
+    await tick(e);
+    expect(e.saveSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({ rooms: { room_b: expect.anything() } }),
+    );
+    expect(
+      server.configuration.schedules.winter.rooms.room_a.days.mon[0].target,
+    ).toBe(25);
+    expect(
+      server.configuration.schedules.winter.rooms.room_b.days.mon[0].target,
+    ).toBe(23);
+  },
+);
+it("disables every room picker while a typed time is invalid, then restores navigation (S11)", async () => {
+  const e = await mount();
+  input(e, "#start-mon-1", "invalid");
+  await tick(e);
+  const rooms = [
+    ...e.shadowRoot!.querySelectorAll<HTMLButtonElement>(".room-picker button"),
+  ];
+  expect(rooms.length).toBe(2);
+  expect(rooms.every((b) => b.disabled)).toBe(true);
+  button(e, "Room B").click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_a");
+  input(e, "#start-mon-1", "07:15");
+  await tick(e);
+  expect(button(e, "Room B").disabled).toBe(false);
+  button(e, "Room B").click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_b");
+});
+it("visibly disables deleting the last schedule with a reason", async () => {
+  const e = await mount();
+  const status = structuredClone(e.status!);
+  delete status.configuration.schedules.autumn;
+  delete status.configuration.schedules.spring;
+  e.status = status;
+  await tick(e);
+  expect(button(e, "Delete").disabled).toBe(true);
+  expect(button(e, "Delete").getAttribute("aria-describedby")).toBe(
+    "delete-reason",
+  );
+  expect(e.shadowRoot!.querySelector("#delete-reason")!.textContent).toContain(
+    "last schedule",
+  );
+});

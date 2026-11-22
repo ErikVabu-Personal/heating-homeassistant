@@ -304,57 +304,40 @@ describe("card payloads and physical thermostat picker", () => {
       kind: "next_block",
     });
   });
-  it("creates a default profile before saving the first room", async () => {
-    const fake = mocked();
-    const empty = fixture();
-    empty.configuration.profiles = {};
-    empty.configuration.rooms = {};
-    empty.configuration.overrides = {};
-    empty.rooms = {};
-    fake.callWS.mockImplementation(async (message: Message) => {
-      if (message.type === "central_heating/profile/save")
-        return { ...empty, saved_id: "new_profile" };
-      if (message.type === "central_heating/room/save") return empty;
-      if (!message.config_entry_id)
-        return { entries: [{ entry_id: "entry_a", title: "Boiler A" }] };
-      return empty;
-    });
-    const card = await mount(fake.hass);
-    card.tab = "Rooms";
-    await settle(card);
-    findButton(card, "Add room").click();
-    await settle(card);
-    card.shadowRoot!.querySelector<HTMLInputElement>("#room-name")!.value =
-      "Room C";
-    const trv = card.shadowRoot!.querySelector<HTMLInputElement>(
-      'input[name=trvs][value="climate.trv_c"]',
-    )!;
-    trv.checked = true;
-    submit(trv.form!);
-    await settle(card);
-    const saves = fake.callWS.mock.calls
-      .map(([message]) => message)
-      .filter((message) =>
-        ["central_heating/profile/save", "central_heating/room/save"].includes(
-          message.type,
-        ),
+  it.each(["", "room_a"])(
+    "seeds a new room via one save with copy source %s",
+    async (source) => {
+      const fake = mocked();
+      const card = await mount(fake.hass);
+      card.tab = "Rooms";
+      await settle(card);
+      findButton(card, "Add room").click();
+      await settle(card);
+      card.shadowRoot!.querySelector<HTMLInputElement>("#room-name")!.value =
+        "Room C";
+      card.shadowRoot!.querySelector<HTMLSelectElement>(
+        "#copy-week-from-room",
+      )!.value = source;
+      const trv = card.shadowRoot!.querySelector<HTMLInputElement>(
+        'input[name=trvs][value="climate.trv_c"]',
+      )!;
+      trv.checked = true;
+      submit(trv.form!);
+      await settle(card);
+      expect(writeMessages(fake, "room/save")).toHaveLength(1);
+      const room = writeMessages(fake, "room/save")[0].room as Record<
+        string,
+        unknown
+      >;
+      expect(room).not.toHaveProperty("week_id");
+      expect(room).not.toHaveProperty("profile_id");
+      if (source) expect(room.copy_week_from_room).toBe(source);
+      else expect(room).not.toHaveProperty("copy_week_from_room");
+      expect(fake.callWS.mock.calls.map(([m]) => m.type)).not.toContain(
+        "central_heating/schedule/save",
       );
-    expect(saves).toHaveLength(2);
-    expect(saves[0].type).toBe("central_heating/profile/save");
-    const profile = saves[0].profile as {
-      days: Record<string, { start: string; target: number }[]>;
-    };
-    expect(Object.keys(profile.days)).toHaveLength(7);
-    expect(profile.days.mon).toEqual([{ start: "00:00", target: 18 }]);
-    expect(saves[1]).toMatchObject({
-      type: "central_heating/room/save",
-      room: {
-        name: "Room C",
-        trvs: ["climate.trv_c"],
-        profile_id: "new_profile",
-      },
-    });
-  });
+    },
+  );
   it("excludes other-instance used TRVs while retaining missing selected thermostats", async () => {
     const fake = mocked();
     const card = await mount(fake.hass);
@@ -528,15 +511,15 @@ it("clears a previous away until in the mode/set payload when returning to auto 
   const mode = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
   card.shadowRoot!.querySelector<HTMLInputElement>("#until")!.value =
     "2026-11-23T18:00";
-  mode.value = "auto";
+  mode.value = "schedule";
   submit(mode.form!);
   await settle(card);
   expect(writeMessages(fake, "mode/set").at(-1)).toMatchObject({
-    mode: "auto",
+    mode: "schedule",
     until: null,
   });
 });
-it.each(["away", "summer", "manual"] as const)(
+it.each(["away", "off", "manual"] as const)(
   "room status describes %s instead of schedule comfort",
   async (mode) => {
     const card = await mount(mocked().hass);
@@ -576,8 +559,8 @@ it("preserves unsaved schedule drafts across tab changes", async () => {
     )!;
   await editor.updateComplete;
   const name =
-    editor.shadowRoot!.querySelector<HTMLInputElement>("#profile-name")!;
-  name.value = "Unsaved profile";
+    editor.shadowRoot!.querySelector<HTMLInputElement>("#schedule-name")!;
+  name.value = "Unsaved week";
   name.dispatchEvent(new Event("input", { bubbles: true }));
   await editor.updateComplete;
   card.tab = "Overview";
@@ -585,11 +568,13 @@ it("preserves unsaved schedule drafts across tab changes", async () => {
   card.tab = "Schedules";
   await settle(card);
   expect(card.shadowRoot!.querySelector("heating-schedules")).toBe(editor);
-  expect(editor.draft!.name).toBe("Unsaved profile");
+  expect(editor.draft!.name).toBe("Unsaved week");
   expect(editor.dirty).toBe(true);
 });
 
 it("previews each selected mode and live values before Apply while retaining internal option values", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-22T10:00:00Z"));
   const fake = mocked();
   fake.hass.locale = { language: "en-GB", time_format: "24" };
   const card = await mount(fake.hass);
@@ -601,19 +586,19 @@ it("previews each selected mode and live values before Apply while retaining int
   expect(
     [...select.options].map((o) => [o.value, o.textContent!.trim()]),
   ).toEqual([
-    ["auto", "Schedule"],
+    ["schedule", "Schedule"],
     ["away", "Away"],
-    ["summer", "Heating off"],
+    ["off", "Off"],
     ["manual", "Manual"],
   ]);
   const expected = {
-    auto: "Rooms follow their weekly profiles.",
+    schedule: "Rooms follow the Winter schedule.",
     away: "All rooms at 16.5°.",
-    summer: "Boiler heating off, radiators kept at 7.5°. Hot water unaffected.",
+    off: "Boiler heating off, radiators kept at 7.5°. Hot water unaffected.",
     manual:
       "Central Heating doesn't touch the radiators; the boiler still follows their demand.",
   };
-  for (const mode of ["manual", "summer", "away", "auto"] as const) {
+  for (const mode of ["manual", "off", "away", "schedule"] as const) {
     select.value = mode;
     select.dispatchEvent(new Event("change", { bubbles: true }));
     await settle(card);
@@ -630,7 +615,7 @@ it("previews each selected mode and live values before Apply while retaining int
   until.dispatchEvent(new Event("input", { bubbles: true }));
   await settle(card);
   expect(card.shadowRoot!.querySelector("#mode-explanation")!.textContent).toBe(
-    "All rooms at 16.5° (until 18:45).",
+    "All rooms at 16.5° (until 23 Nov 2026 18:45).",
   );
   until.value = "";
   until.dispatchEvent(new Event("input", { bubbles: true }));
@@ -639,7 +624,7 @@ it("previews each selected mode and live values before Apply while retaining int
     "All rooms at 16.5°.",
   );
 });
-it.each(["auto", "away", "summer", "manual"] as const)(
+it.each(["schedule", "away", "off", "manual"] as const)(
   "uses the %s display name in the header and room status",
   async (mode) => {
     const card = await mount(mocked().hass);
@@ -654,3 +639,99 @@ it.each(["auto", "away", "summer", "manual"] as const)(
     );
   },
 );
+
+it("shows and hides Away until with the selected mode and clears drafts after a successful atomic Apply", async () => {
+  const fake = mocked();
+  fake.callWS.mockImplementation(async (message: Message) => {
+    if (!message.config_entry_id)
+      return { entries: [{ entry_id: "entry_a", title: "Boiler A" }] };
+    const status = fixture();
+    status.config_entry_id = "entry_a";
+    if (message.type === "central_heating/mode/set") {
+      status.configuration.mode = {
+        value: message.mode as import("./types").Mode,
+        until: message.until as string | null,
+      };
+      if (message.schedule_id)
+        status.configuration.active_schedule_id = String(message.schedule_id);
+    }
+    return status;
+  });
+  const card = await mount(fake.hass);
+  const select = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
+  expect(
+    card.shadowRoot!.querySelector<HTMLElement>("[data-until]")!.hidden,
+  ).toBe(true);
+  select.value = "away";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle(card);
+  expect(
+    card.shadowRoot!.querySelector<HTMLElement>("[data-until]")!.hidden,
+  ).toBe(false);
+  select.value = "schedule";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle(card);
+  expect(
+    card.shadowRoot!.querySelector<HTMLElement>("[data-until]")!.hidden,
+  ).toBe(true);
+  const schedule =
+    card.shadowRoot!.querySelector<HTMLSelectElement>("#active-schedule")!;
+  schedule.value = "autumn";
+  schedule.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle(card);
+  expect(
+    card.shadowRoot!.querySelector("#mode-explanation")!.textContent,
+  ).toContain("Autumn schedule");
+  submit(select.form!);
+  await settle(card);
+  expect(writeMessages(fake, "mode/set").at(-1)).toMatchObject({
+    mode: "schedule",
+    until: null,
+    schedule_id: "autumn",
+  });
+  expect(card.modeDraft).toBeUndefined();
+  expect(card.modeUntilDraft).toBeUndefined();
+  expect(card.scheduleDraft).toBeUndefined();
+  expect(card.shadowRoot!.querySelector("header")!.textContent).toContain(
+    "Schedule · Autumn",
+  );
+});
+
+it.each(["schedule", "away", "off", "manual"] as const)(
+  "offers the Schedule selector only in Schedule mode, selecting %s (C01)",
+  async (mode) => {
+    const card = await mount(mocked().hass);
+    const select = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
+    select.value = mode;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle(card);
+    expect(!!card.shadowRoot!.querySelector("#active-schedule")).toBe(
+      mode === "schedule",
+    );
+  },
+);
+it("never offers or sends week seeding when editing an existing room (C06/C07)", async () => {
+  const fake = mocked();
+  const card = await mount(fake.hass);
+  card.tab = "Rooms";
+  await settle(card);
+  findButton(card, "Edit").click();
+  await settle(card);
+  expect(card.shadowRoot!.querySelector("#copy-week-from-room")).toBeNull();
+  const name = card.shadowRoot!.querySelector<HTMLInputElement>("#room-name")!;
+  // Even a stale/injected form control cannot add create-only seeding to edits.
+  const stale = document.createElement("input");
+  stale.name = "copy_week_from_room";
+  stale.value = "room_b";
+  name.form!.append(stale);
+  name.value = "Room A renamed";
+  submit(name.form!);
+  await settle(card);
+  const writes = writeMessages(fake, "room/save");
+  expect(writes).toHaveLength(1);
+  expect(writes[0].room).toMatchObject({
+    id: "room_a",
+    name: "Room A renamed",
+  });
+  expect(writes[0].room).not.toHaveProperty("copy_week_from_room");
+});

@@ -1,5 +1,5 @@
 import type { Configuration, Status } from "../src/types";
-import { defaultProfile } from "../src/format";
+import { defaultWeek } from "../src/format";
 const configuration: Configuration = {
   settings: {
     frost_temperature: 16,
@@ -10,39 +10,60 @@ const configuration: Configuration = {
     sync_rooms_on_knob_change: true,
     retry_seconds: 300,
   },
-  mode: { value: "auto", until: null },
+  mode: { value: "schedule", until: null },
   shadow: true,
-  profiles: {
-    profile_a: {
-      ...defaultProfile("Profile A"),
-      days: Object.fromEntries(
-        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day, i) => [
-          day,
-          [
-            { start: "00:00", target: 18 },
-            { start: i < 5 ? "06:00" : "08:00", target: 21 },
-            { start: "09:00", target: 18.5 },
-            { start: "17:00", target: 21 },
-            { start: "22:00", target: 18 },
-          ],
-        ]),
-      ),
+  active_schedule_id: "winter",
+  schedules: {
+    winter: {
+      name: "Winter",
+      rooms: {
+        room_a: {
+          days: Object.fromEntries(
+            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day, i) => [
+              day,
+              [
+                { start: "00:00", target: 18 },
+                { start: i < 5 ? "06:00" : "08:00", target: 21 },
+                { start: "09:00", target: 18.5 },
+                { start: "17:00", target: 21 },
+                { start: "22:00", target: 18 },
+              ],
+            ]),
+          ),
+        },
+        room_b: {
+          days: Object.fromEntries(
+            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+              day,
+              [
+                { start: "00:00", target: 17 },
+                { start: "07:00", target: 20 },
+                { start: "22:00", target: 17 },
+              ],
+            ]),
+          ),
+        },
+      },
     },
-    profile_b: defaultProfile("Profile B"),
-    profile_c: defaultProfile("Profile C"),
+    autumn: {
+      name: "Autumn",
+      rooms: { room_a: defaultWeek(), room_b: defaultWeek() },
+    },
+    spring: {
+      name: "Spring",
+      rooms: { room_a: defaultWeek(), room_b: defaultWeek() },
+    },
   },
   rooms: {
     room_a: {
       name: "Room A",
       trvs: ["climate.trv_a"],
-      profile_id: "profile_a",
       area_id: "area_a",
       enabled: true,
     },
     room_b: {
       name: "Room B",
       trvs: ["climate.trv_b"],
-      profile_id: "profile_a",
       area_id: null,
       enabled: true,
     },

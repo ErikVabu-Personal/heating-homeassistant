@@ -127,14 +127,16 @@ class HeatingEngine:
             if unloading and not self._shutting_down and not self.store.data.shadow:
                 await self.adapter.async_stop(unloading=True)
 
-    async def async_recalculate(self, *, apply_rooms: bool = False, force: bool = False) -> None:
+    async def async_recalculate(
+        self, *, apply_rooms: bool = False, force: bool = False, room_ids: set[str] | None = None
+    ) -> None:
         async with self._lock:
             if self._stopped or self._shutting_down or self.hass.state is not CoreState.running:
                 return
             now = dt_util.utcnow()
             mode = self.store.data.mode
             if mode.until is not None and mode.until.astimezone(UTC) <= now:
-                await self.store.async_update(lambda data: replace(data, mode=Mode("auto")))
+                await self.store.async_update(lambda data: replace(data, mode=Mode("schedule")))
                 apply_rooms = True
             readings = []
             for room in self.store.data.rooms:
@@ -163,7 +165,7 @@ class HeatingEngine:
             filtered = smooth(SmoothingInput(self.demand.virtual_temp_raw, tick), self._smoothing)
             self._smoothing, self.temperature = filtered.state, filtered.value
             self.command = BoilerCommand(
-                self.demand.demand_count > 0 and self.store.data.mode.value != "summer",
+                self.demand.demand_count > 0 and self.store.data.mode.value != "off",
                 self.temperature,
                 self.demand.virtual_setpoint,
             )
@@ -185,15 +187,30 @@ class HeatingEngine:
             async with self._room_lock:
                 if not self._stopped and self.hass.state is CoreState.running:
                     try:
-                        await self.rooms.async_apply(force=force)
+                        await self.rooms.async_apply(force=force, room_ids=room_ids)
                     except Exception:
                         _LOGGER.exception("Central Heating room application failed")
             self._notify()
 
-    async def async_set_mode(self, value: str, until: datetime | None = None) -> None:
+    async def async_set_mode(
+        self, value: str, until: datetime | None = None, schedule_id: str | None = None
+    ) -> None:
+        from .storage import canonical_mode
+
+        value = canonical_mode(value)
+        if schedule_id is not None and value != "schedule":
+            raise ServiceValidationError("A schedule can only be selected in Schedule mode")
         async with self._lock:
             try:
-                await self.store.async_update(lambda data: replace(data, mode=Mode(value, until)))
+                await self.store.async_update(
+                    lambda data: replace(
+                        data,
+                        mode=Mode(value, until),
+                        active_schedule_id=schedule_id
+                        if schedule_id is not None
+                        else data.active_schedule_id,
+                    )
+                )
             except ValueError as exc:
                 raise ServiceValidationError(str(exc)) from exc
         await self.async_recalculate(apply_rooms=True)
@@ -213,6 +230,15 @@ class HeatingEngine:
                 raise ServiceValidationError(str(exc)) from exc
         await self.async_recalculate(apply_rooms=True)
 
-    async def async_data_changed(self) -> None:
+    async def async_set_schedule(self, name_or_id: str) -> None:
+        from .schedule_config import resolve_schedule
+
+        async with self._lock:
+            await self.store.async_update(
+                lambda data: replace(data, active_schedule_id=resolve_schedule(data, name_or_id))
+            )
+        await self.async_data_changed()
+
+    async def async_data_changed(self, *, room_ids: set[str] | None = None) -> None:
         self._watch_trvs()
-        await self.async_recalculate(apply_rooms=True)
+        await self.async_recalculate(apply_rooms=True, room_ids=room_ids)

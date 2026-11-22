@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { temperature, time, defaultProfile, localDateTime } from "./format";
+import { temperature, time, defaultWeek, localDateTime } from "./format";
 describe("display and defaults", () => {
   it("formats finite temperatures and unknown values", () => {
     expect(temperature(21.5)).toBe("21.5°");
@@ -13,11 +13,11 @@ describe("display and defaults", () => {
     );
   });
   it("creates a complete neutral week", () => {
-    const profile = defaultProfile();
-    expect(Object.keys(profile.days)).toHaveLength(7);
-    expect(profile.days.mon).toEqual([{ start: "00:00", target: 18 }]);
-    profile.days.mon[0].target = 21;
-    expect(profile.days.tue[0].target).toBe(18);
+    const week = defaultWeek();
+    expect(Object.keys(week.days)).toHaveLength(7);
+    expect(week.days.mon).toEqual([{ start: "00:00", target: 18 }]);
+    week.days.mon[0].target = 21;
+    expect(week.days.tue[0].target).toBe(18);
   });
 });
 
@@ -47,4 +47,16 @@ it("honors HA 12-hour formatting even when its language normally uses 24-hour ti
       time_zone: "server",
     }),
   ).toMatch(/^07:45\s*pm$/i);
+});
+
+it("includes an Away end date outside today in HA's zone", async () => {
+  const { awayUntilLabel } = await import("./format");
+  const locale = { language: "en-GB", time_format: "24" as const };
+  const now = new Date("2026-11-22T23:30:00Z");
+  expect(awayUntilLabel("2026-11-23T18:00", "Europe/Berlin", locale, now)).toBe(
+    "18:00",
+  );
+  expect(awayUntilLabel("2026-11-24T18:00", "Europe/Berlin", locale, now)).toBe(
+    "24 Nov 2026 18:00",
+  );
 });

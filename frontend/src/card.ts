@@ -1,12 +1,6 @@
 import { LitElement, html, nothing, svg, type TemplateResult } from "lit";
 import { HeatingClient, overridePayload } from "./api";
-import {
-  defaultProfile,
-  localDateTime,
-  temperature,
-  time,
-  scheduleTime,
-} from "./format";
+import { localDateTime, temperature, time, awayUntilLabel } from "./format";
 import "./schedules";
 import { modeNames, modeExplanation } from "./modes";
 import { styles } from "./styles";
@@ -42,6 +36,7 @@ export class CentralHeatingCard extends LitElement {
     shadowConfirm: { state: true },
     modeDraft: { state: true },
     modeUntilDraft: { state: true },
+    scheduleDraft: { state: true },
   };
   status?: Status;
   tab: Tab = "Overview";
@@ -58,6 +53,7 @@ export class CentralHeatingCard extends LitElement {
   shadowConfirm = false;
   modeDraft?: Mode;
   modeUntilDraft?: string;
+  scheduleDraft?: string;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private retryAttempt = 0;
   private removeConnectionListeners?: () => void;
@@ -117,6 +113,7 @@ export class CentralHeatingCard extends LitElement {
   private disconnect() {
     this.modeDraft = undefined;
     this.modeUntilDraft = undefined;
+    this.scheduleDraft = undefined;
     this.generation++;
     this.releaseSubscription();
     this.removeConnectionListeners?.();
@@ -284,7 +281,7 @@ export class CentralHeatingCard extends LitElement {
           <h1>${this.config.title ?? "Central Heating"}</h1>
           <small
             >${s
-              ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}`
+              ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}${s.configuration.mode.value === "schedule" ? ` · ${s.configuration.schedules[s.configuration.active_schedule_id]?.name ?? ""}` : ""}`
               : "Your rooms, one comfortable home"}</small
           >
         </div>
@@ -374,6 +371,8 @@ export class CentralHeatingCard extends LitElement {
     const selectedUntil =
       this.modeUntilDraft ??
       localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone);
+    const selectedSchedule =
+      this.scheduleDraft ?? s.configuration.active_schedule_id;
     return html`<div class="grid">
         <section class="panel boiler" aria-label="Boiler status">
           <div class="boiler-heading">
@@ -419,7 +418,7 @@ export class CentralHeatingCard extends LitElement {
                       .value as Mode;
                   }}
                 >
-                  ${(["auto", "away", "summer", "manual"] as Mode[]).map(
+                  ${(["schedule", "away", "off", "manual"] as Mode[]).map(
                     (mode) =>
                       html`<option
                         value=${mode}
@@ -434,14 +433,40 @@ export class CentralHeatingCard extends LitElement {
                     selectedMode,
                     s.configuration.settings,
                     selectedMode === "away" && selectedUntil
-                      ? scheduleTime(
-                          selectedUntil.slice(11, 16),
+                      ? awayUntilLabel(
+                          selectedUntil,
+                          this.hass?.config?.time_zone,
                           this.hass?.locale,
                         )
                       : undefined,
+                    s.configuration.schedules[selectedSchedule]?.name,
                   )}</small
                 >
               </div>
+              ${selectedMode === "schedule"
+                ? html`<div class="field">
+                    <label for="active-schedule">Schedule</label
+                    ><select
+                      id="active-schedule"
+                      name="schedule_id"
+                      @change=${(e: Event) => {
+                        this.scheduleDraft = (
+                          e.target as HTMLSelectElement
+                        ).value;
+                      }}
+                    >
+                      ${Object.entries(s.configuration.schedules).map(
+                        ([id, schedule]) =>
+                          html`<option
+                            value=${id}
+                            ?selected=${id === selectedSchedule}
+                          >
+                            ${schedule.name}
+                          </option>`,
+                      )}
+                    </select>
+                  </div>`
+                : nothing}
               <div class="field" data-until ?hidden=${selectedMode !== "away"}>
                 <label for="until">Away until (optional)</label
                 ><input
@@ -481,13 +506,13 @@ export class CentralHeatingCard extends LitElement {
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${s.configuration.mode.value !== "auto"
+                  >${s.configuration.mode.value !== "schedule"
                     ? `${modeNames[s.configuration.mode.value]} · ${temperature(room.desired ?? room.target)}`
                     : room.override_until
                       ? `Schedule · Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
                       : room.demanding
                         ? "Schedule · Calling for heat"
-                        : "Schedule · Following profile"}</small
+                        : "Schedule · Following week"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until
@@ -538,9 +563,22 @@ export class CentralHeatingCard extends LitElement {
     const mode = String(data.get("mode"));
     const until =
       mode === "away" && data.get("until") ? String(data.get("until")) : null;
-    if (await this.write("mode/set", { mode, until }, "Heating mode saved.")) {
+    if (
+      await this.write(
+        "mode/set",
+        {
+          mode,
+          until,
+          ...(mode === "schedule"
+            ? { schedule_id: String(data.get("schedule_id")) }
+            : {}),
+        },
+        "Heating mode saved.",
+      )
+    ) {
       this.modeDraft = undefined;
       this.modeUntilDraft = undefined;
+      this.scheduleDraft = undefined;
     }
   };
   private async openQuick(id: string) {
@@ -711,9 +749,9 @@ export class CentralHeatingCard extends LitElement {
                       <h3>${room.name}</h3>
                       <small
                         >${room.trvs.length}
-                        thermostat${room.trvs.length === 1 ? "" : "s"} ·
-                        ${s.configuration.profiles[room.profile_id]?.name ??
-                        "No profile"}${room.enabled ? "" : " · Disabled"}</small
+                        thermostat${room.trvs.length === 1
+                          ? ""
+                          : "s"}${room.enabled ? "" : " · Disabled"}</small
                       >
                       <div class="room-tags">
                         ${room.trvs.map(
@@ -749,8 +787,6 @@ export class CentralHeatingCard extends LitElement {
         : {
             name: "",
             trvs: [],
-            profile_id:
-              Object.keys(this.status?.configuration.profiles ?? {})[0] ?? "",
             area_id: null,
             enabled: true,
           },
@@ -779,7 +815,6 @@ export class CentralHeatingCard extends LitElement {
         !used.has(id) &&
         !(s.room_entity_ids ?? []).includes(id),
     );
-    const profiles = Object.entries(s.configuration.profiles);
     return html`<form class="panel" @submit=${this.saveRoom}>
       <h2>${draft.id ? "Edit room" : "Add a room"}</h2>
       <fieldset ?disabled=${this.busy || !this.writable}>
@@ -794,27 +829,18 @@ export class CentralHeatingCard extends LitElement {
               .value=${draft.room.name}
             />
           </div>
-          <div class="field">
-            <label for="room-profile">Heating profile</label
-            ><select
-              id="room-profile"
-              name="profile_id"
-              .value=${draft.room.profile_id}
-            >
-              ${profiles.length
-                ? profiles.map(
-                    ([id, p]) => html`<option value=${id}>${p.name}</option>`,
-                  )
-                : html`<option value="">
-                    Create default · 18° all week
-                  </option>`}</select
-            >${!profiles.length
-              ? html`<small
-                  >A simple 00:00 → 18° profile will be created when you
-                  save.</small
-                >`
-              : nothing}
-          </div>
+          ${!draft.id
+            ? html`<div class="field">
+                <label for="copy-week-from-room">Start its weeks from</label
+                ><select id="copy-week-from-room" name="copy_week_from_room">
+                  <option value="">18° all day</option>
+                  ${Object.entries(s.configuration.rooms).map(
+                    ([id, room]) =>
+                      html`<option value=${id}>${room.name}</option>`,
+                  )}
+                </select>
+              </div>`
+            : nothing}
           <div class="field wide">
             <label for="trv-filter">Radiator thermostats</label
             ><input
@@ -952,27 +978,13 @@ export class CentralHeatingCard extends LitElement {
       this.error = "Choose at least one thermostat.";
       return;
     }
-    let profileId = String(form.get("profile_id"));
-    if (!profileId) {
-      if (
-        !(await this.write(
-          "profile/save",
-          { profile: defaultProfile() },
-          "Default profile created.",
-        ))
-      )
-        return;
-      profileId = this.status.saved_id ?? "";
-    }
-    if (!profileId) {
-      this.error = "A heating profile is required.";
-      return;
-    }
     const room = {
       ...(this.editing.id ? { id: this.editing.id } : {}),
       name,
       trvs,
-      profile_id: profileId,
+      ...(!this.editing.id && form.get("copy_week_from_room")
+        ? { copy_week_from_room: String(form.get("copy_week_from_room")) }
+        : {}),
       area_id: String(form.get("area_id") ?? "") || null,
       enabled: form.has("enabled"),
     };
@@ -984,20 +996,34 @@ export class CentralHeatingCard extends LitElement {
       .status=${s}
       .hass=${this.hass}
       .writable=${this.writable}
-      .saveProfile=${async (profile: unknown) => {
-        if (!(await this.write("profile/save", { profile }, "Profile saved.")))
+      .saveSchedule=${async (schedule: unknown) => {
+        if (
+          !(await this.write("schedule/save", { schedule }, "Schedule saved."))
+        )
           throw new Error(this.error || "Unable to save while reconnecting.");
         return this.status?.saved_id;
       }}
-      .deleteProfile=${async (id: string) => {
+      .deleteSchedule=${async (id: string) => {
         if (
           !(await this.write(
-            "profile/delete",
-            { profile_id: id },
-            "Profile deleted.",
+            "schedule/delete",
+            { schedule_id: id },
+            "Schedule deleted.",
           ))
         )
           throw new Error(this.error || "Unable to delete while reconnecting.");
+      }}
+      .activateSchedule=${async (id: string) => {
+        if (
+          !(await this.write(
+            "schedule/activate",
+            { schedule_id: id },
+            "Schedule activated.",
+          ))
+        )
+          throw new Error(
+            this.error || "Unable to activate while reconnecting.",
+          );
       }}
     ></heating-schedules>`;
   }

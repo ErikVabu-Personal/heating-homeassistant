@@ -6,7 +6,7 @@
 
 One Home Assistant integration that does three things:
 - controls a central-heating boiler from the demand of per-room radiator thermostats (TRVs);
-- runs weekly heating profiles for the rooms;
+- runs whole-house schedules with a separate week for every room;
 - ships its own dashboard card to set up and run both.
 
 It replaces a hand-written YAML package (a room group, template sensors, a filter sensor, two `input_number`
@@ -30,15 +30,15 @@ helpers and three automations), the Scheduler integration and its card, and a su
 
 | Term | Meaning |
 |---|---|
-| **TRV** | A `climate` entity of a radiator thermostat that reports `current_temperature` and a target (`temperature`). |
-| **Room** | A named group of one or more TRVs that always share a target. Each room follows one profile. |
-| **Profile** | A weekly program: for each weekday, a list of blocks, where each block has a start time and a target temperature. |
-| **Block** | It starts at its start time and runs until the next block. Each day starts with a block at 00:00. |
-| **Override** | A temporary target for a room that wins over its profile. It's set from the card, a service or a TRV's own knob. |
-| **Mode** | A global state: `auto`, `away`, `summer` or `manual` (§6.2). |
-| **Demand** | A room (TRV) whose target is more than the hysteresis above its current temperature. |
-| **Boiler adapter** | The piece that sends the computed boiler command to a specific controller (§5.3). v1 has one: the DIYLESS thermostat over MQTT. |
-| **Shadow mode** | The integration computes everything but sends nothing to the boiler. |
+| TRV | A physical radiator `climate` entity reporting current and target temperatures. |
+| Room | A named group of physical TRVs sharing a target. |
+| Schedule | A user-created whole-house week plan, for example Winter, Autumn or Spring. Exactly one is active. |
+| Room week | Each room's seven days inside each schedule. Each day has ordered blocks starting at 00:00. |
+| Block | A start time and target, effective until the next block. Starts are on a five-minute grid; targets are 5–30° in 0.5° steps. |
+| Override | A temporary room target, with next-change or duration expiry, that wins over its scheduled target in Schedule/Away. |
+| Mode | Schedule (`schedule`), Away (`away`), Off (`off`) or Manual (`manual`). |
+| Demand | A TRV whose target exceeds current temperature by more than hysteresis. |
+| Boiler adapter | Sends one computed command to the boiler controller; DIYLESS MQTT is the first adapter. |
 
 ## 3. Behaviour that must match the current package
 
@@ -52,7 +52,7 @@ directly. Section 5 gives the full rules.
 | Virtual temperature (raw) | the mean of the demanding TRVs; with none demanding, the mean of all available TRVs | the same |
 | Smoothing | HA `filter`: outlier (window 4, radius 1.5), then low-pass (time constant 30 samples, precision 2) | the same outlier step, then a **time-based** low-pass (§5.2). Within ±0.1 °C of the package is accepted in shadow mode. |
 | Virtual setpoint | the maximum target among the demanding TRVs (1 decimal); with none, the frost setpoint | the same |
-| Boiler mode | `heat` if demand > 0, else `off` | the same, plus `off` in `summer` mode |
+| Boiler mode | `heat` if demand > 0, else `off` | the same, plus forced boiler `off` in Off mode |
 | Sending | on change, plus every 30 s | the same |
 | Controller temperature source | `tempSource = 1` at start-up and every 6 h | the same |
 | Frost setpoint, hysteresis | YAML `input_number` with `initial:`, so read-only and reset on every restart | stored settings, editable in the card and as `number` entities, kept across restarts |
@@ -82,7 +82,7 @@ directly. Section 5 gives the full rules.
   entities.
 - **Configuration is split in two:**
   - the config flow holds only the boiler adapter and its connection details;
-  - rooms, profiles, mode and tuning settings live in a `Store` and are edited through the card (websocket API)
+  - rooms, schedules, mode and tuning settings live in a `Store` and are edited through the card (websocket API)
     or services.
 
 ## 5. Boiler control
@@ -120,7 +120,7 @@ the raw value happens to change.
 ```python
 @dataclass(frozen=True)
 class BoilerCommand:
-    heat: bool                  # demand_count > 0 and mode != "summer"
+    heat: bool                  # demand_count > 0 and mode != "off"
     room_temperature: float | None   # virtual_temp; None when unknown
     setpoint: float             # virtual_setpoint
 
@@ -158,85 +158,78 @@ trailing slash. It's configurable.
 - Shadow mode doesn't change schedule writes to TRVs; `manual` mode does that (§6.2). During migration, use
   shadow mode together with `manual` mode, so a new install changes nothing until it's switched on.
 
-## 6. Rooms, profiles, modes and overrides
+## 6. Rooms, schedules, modes and overrides
 
-### 6.1 Data model (Store, version 1, minor version 3)
+### 6.1 Data model (Store version 1, minor version 4)
+
 ```jsonc
 {
-  "shadow": true,                              // stored, on for new entries
-  "settings": {
-    "frost_temperature": 16.0,
-    "hysteresis": 0.3,
-    "away_temperature": 15.0,
-    "override_default": "next_block",      // or "duration"
-    "override_minutes": 120,
-    "sync_rooms_on_knob_change": true,
-    "retry_seconds": 300
+  "shadow": true,
+  "settings": {"frost_temperature": 16, "hysteresis": 0.3, "away_temperature": 15,
+    "override_default": "next_block", "override_minutes": 120,
+    "sync_rooms_on_knob_change": true, "retry_seconds": 300},
+  "mode": {"value": "manual", "until": null},
+  "active_schedule_id": "winter",
+  "schedules": {
+    "winter": {"name": "Winter", "rooms": {
+      "room_a": {"days": {"mon": [{"start": "00:00", "target": 18}],
+        "tue": [...], "wed": [...], "thu": [...], "fri": [...], "sat": [...], "sun": [...]}}
+    }}
   },
-  "mode": {"value": "manual", "until": null},          // a new entry starts in manual
-  "profiles": {
-    "<profile_id>": {
-      "name": "Living",
-      "days": {
-        "mon": [{"start": "00:00", "target": 18.0}, {"start": "06:30", "target": 21.0}, ...],
-        "tue": [...], "wed": [...], "thu": [...], "fri": [...], "sat": [...], "sun": [...]
-      }
-    }
-  },
-  "rooms": {
-    "<room_id>": {"name": "Kitchen", "trvs": ["climate.x", "climate.y"], "profile_id": "<profile_id>",
-                  "area_id": null, "enabled": true}
-  },
-  "overrides": {"<room_id>": {"target": 22.0, "until": "2026-01-01T18:00:00+01:00", "source": "card", "kind": "next_block"}}
+  "rooms": {"room_a": {"name": "Room A", "trvs": ["climate.trv_a"], "area_id": null, "enabled": true}},
+  "overrides": {"room_a": {"target": 22, "until": "2027-01-01T18:00:00+00:00", "source": "card", "kind": "next_block"}}
 }
 ```
 
-Store minor-version migration validates and fills missing defaults (including `shadow: true`) from earlier
-version-1 data. Updates are validated before publication and serialized under a lock. HA's `Store` catches and
-logs disk-write failures: the new in-memory snapshot still takes effect; it may not survive a restart.
-Removing the config entry removes its Store file and MQTT repair issue.
+Every schedule has exactly one validated week for every room. At least one schedule exists, even with no rooms;
+new installs start with an empty Winter. Schedule names are non-empty and unique after trimming/case-folding.
+Room/schedule identities remain stable across renames. A physical TRV can belong to only one room across instances.
+The active or last schedule cannot be deleted. A new room gets 00:00 →18° in every schedule, or copies another
+room's week separately inside each schedule. Deleting a room removes all its weeks and override.
 
-**Validation, on every write:**
-- **Settings:** away temperature is 5–30 in steps of 0.5; override duration is 1–10080 integer minutes.
-- **Overrides:** targets are 5–30 in steps of 0.5. Services and entity actions raise `ServiceValidationError`
-  for invalid input.
-- **Blocks:** each day has at least one block, the first starting at `00:00`. Start times are `HH:MM` on a 5-minute
-  grid, strictly increasing. Targets are 5.0–30.0 in steps of 0.5.
-- **TRVs:** each TRV belongs to at most one room. A room has at least one TRV.
-- **Deleting:** a profile can't be deleted while rooms use it.
-- **IDs:** profile and room IDs are random. Names are for display only.
+Minor-version migration converts existing profiles into one active Winter: each room's week is a detached copy
+of its former profile's days. It removes profiles/profile_id, preserves room IDs, names, TRVs, area/enabled flags,
+settings, shadow and overrides (including kind/expiry/source), and maps auto→schedule and summer→off. Empty installs
+also receive Winter. Missing references or invalid weeks fail validation before a migrated Store can be saved.
+Legacy overrides without a recorded kind retain their expiry as duration. A generic four-profile/nine-room fixture,
+multi-TRV rooms and both active override kinds exercise the pure conversion and HA's migration callback/reload.
+Read-only ownership lookups convert old files only in memory and reject future minor versions without writing.
 
-Times are local wall-clock times (`dt_util`). A daylight-saving change applies blocks by local time: a block at a
-time that doesn't exist that day starts at the next valid minute. If several starts resolve to the same instant,
-the last block in the day's order wins, including an explicit block at that valid minute. An ambiguous start
-uses its first occurrence.
+All configuration updates build and validate a detached complete candidate before one serialized Store save.
+HA logs disk-write failures; the validated in-memory snapshot may advance without surviving a restart.
+Removing an entry removes its own Store and repair issue.
 
-### 6.2 Modes
-| Name (internal value) | Room target written to TRVs | Boiler |
-|---|---|---|
-| Schedule (`auto`) | the override if one is active, otherwise the profile block | follows demand |
-| Away (`away`) | the override if one is active, otherwise `away_temperature` | follows demand |
-| Heating off (`summer`) | `frost_temperature` | always `off`; hot water unaffected |
-| Manual (`manual`) | nothing is written; the TRVs keep whatever they have | follows demand |
+### 6.2 Modes and active schedule
 
-The card explains the selected mode before Apply: Schedule follows weekly profiles; Away names the live
-away temperature and optional end time; Heating off names the live frost temperature and leaves hot water
-unaffected; Manual leaves radiator targets alone while the boiler follows demand. Labels appear consistently
-in the card and translated HA select states. Store/services/API/select option values remain unchanged.
+| Name | Stored/select value | Radiators | Boiler |
+|---|---|---|---|
+| Schedule | `schedule` | Override, otherwise the room's active-schedule block | Follows demand |
+| Away | `away` | Override, otherwise away temperature | Follows demand |
+| Off | `off` | Frost temperature | Always off; hot water unaffected |
+| Manual | `manual` | No writes | Follows existing TRV demand |
 
-- `away` can have an `until` time; when it passes, the mode returns to `auto`.
-- The mode is a `select` entity, and is also set through the card or a service.
-- A service `until` without an offset (from the date picker) is interpreted in HA’s configured local time zone.
-- Knob changes create overrides only in `auto` and `away`; in `summer` and `manual` they are neither stored
-  nor immediately reverted. Summer reapplies frost at the next room trigger.
+Services and websocket mode/set accept auto and summer as aliases and immediately store schedule and off.
+Away's optional end is interpreted in HA's server zone when no offset is supplied; expiry returns to schedule.
+Mode select options contain only the four new values, with translated states. A separate Active schedule select
+contains schedule names and activates by name; its options/current state follow creates, renames and deletes.
+set_schedule accepts a name or ID. Activation is permitted in any mode, preserving Manual and shadow guarantees.
+
+The card explains the selected mode before Apply. Schedule says “Rooms follow the {name} schedule” and shows a
+schedule selector; Apply sends mode plus schedule_id atomically. Away shows its live temperature and optional end,
+including the date when the end isn't today in HA's zone. Off names the frost temperature and leaves hot water
+unaffected. Manual leaves radiator targets alone while the boiler follows demand. Header: “9 rooms · Schedule · Winter”.
 
 ### 6.3 Applying targets to TRVs
+
+Inactive schedule edits and schedule renames do not apply room targets or change active overrides. All other
+existing room triggers remain. Manual never writes TRVs; shadow plus Manual never sends TRV or boiler commands.
+
 - **Desired target for a room:** given by the mode table in §6.2. In `manual` mode there's none.
 - **Re-apply only on these triggers:**
-  - at every block start of any profile in use (`async_track_point_in_time` on the next start, then reschedule);
+  - at every block start of enabled room weeks in the active schedule only (`async_track_point_in_time` on the next start, then reschedule);
   - when the mode changes;
   - when an override is set, cleared or expires;
-  - when rooms, profiles or settings are saved;
+  - when rooms or settings are saved; when the active schedule changes; or when an active room week is edited (only affected rooms);
   - once after Home Assistant has started;
   - when a TRV comes back online (apply its room);
   - on the retry timers below.
@@ -269,7 +262,7 @@ in the card and translated HA select states. Store/services/API/select option va
   number of minutes. "Until the next change" means the next effective block start whose target differs from
   the currently scheduled target, skipping equal-target blocks across midnight and days. If the entire week
   has one target, the override expires after seven elapsed days. The stored `next_block` option keeps its name.
-- **From a TRV knob, only in auto/away:**
+- **From a TRV knob, only in Schedule/Away:**
   - A report equal to any pending command with one of our pending command Contexts is **provisional**: HA
     may have reported the command optimistically. Keep pending commands and stale guards. Only a matching
     report with a foreign Context, or the retry check finding the target in place, releases them. Normal room
@@ -287,20 +280,18 @@ in the card and translated HA select states. Store/services/API/select option va
     command and its retry rather than start a user pause. A real knob turn back to that old value or mode
     inside the retry window is indistinguishable and gets corrected by the retry.
   - Any other target change is a knob change. Round to 0.5 and clamp to 5–30. If it equals the room target
-    without an override (profile in auto, away temperature in away), clear the override if one exists (no Store
+    without an override (active week in Schedule, away temperature in away), clear the override if one exists (no Store
     save when there is nothing to clear); otherwise create or
     update it with `settings.override_default`. With `sync_rooms_on_knob_change` on, apply it to the other TRVs.
   - Confirmed commands and commands outside the retry window never mask later knob changes.
-- **Profile edits:** an active `next_block` override recomputes its expiry against the edited profile
-  at the time of a schedule-days edit; a `duration` override keeps its expiry. Renaming a profile alone
-  does not recompute expiry. The stored profile snapshot is refreshed after recomputation, so later re-applies
-  do not slide a constant week’s seven-day cap. Reassigning a room to another profile
-  still clears its override. The selected kind is persisted (Store minor version 3) so this also works after
-  reload, independently of later changes to override defaults. Legacy overrides without a recorded kind
-  retain their existing expiry and load as `duration`: their original kind cannot be recovered reliably.
-- **Expiry:** an override expires at its `until`, or when it's cleared, or when the room's profile changes. The
+- **Schedule edits and activation:** next-change overrides recompute against the affected room's active week.
+  Switching the active schedule counts as an edit for all rooms, even when weeks happen to be identical.
+  Editing an active room week affects only that room; duration overrides keep their expiry. Inactive edits and
+  renames affect no overrides. Refresh the stored active-week snapshot after recomputation so a constant week's
+  seven-day cap cannot slide on later re-applies. Kind is persisted independently of later default-setting changes.
+- **Expiry:** an override expires at its `until`, or when it's cleared. The
   room then goes back to the desired target.
-- **Summer/manual:** knob changes are not tracked or immediately reverted.
+- **Off/Manual:** knob changes are not tracked or immediately reverted.
 
 ## 7. Entities
 
@@ -308,8 +299,9 @@ All unique IDs are `<entry_id>_<key>`. Boiler entity names are translated; room 
 
 | Platform | Entity | Notes |
 |---|---|---|
-| `climate` | one per room | `current_temperature` = the mean of the room's available TRVs; `target_temperature` = the desired target (or the TRVs' target in `manual`). `hvac_modes: [heat]`. `hvac_action: heating` while the room is demanding. `set_temperature` sets an override with the default length. Attributes: `profile`, `scheduled_target`, `next_change`, `next_target`, `override_until`, `demanding`, `trvs`, `sync_problem`. |
-| `select` | mode | `auto`, `away`, `summer`, `manual` |
+| `climate` | one per room | `current_temperature` = the mean of the room's available TRVs; `target_temperature` = the desired target (or the TRVs' target in `manual`). `hvac_modes: [heat]`. `hvac_action: heating` while the room is demanding. `set_temperature` sets an override with the default length. Attributes: `schedule` (the active schedule name), `scheduled_target`, `next_change`, `next_target`, `override_until`, `demanding`, `trvs`, `sync_problem`. |
+| `select` | mode | `schedule`, `away`, `off`, `manual` |
+| `select` | active schedule | schedule names; selecting one activates it |
 | `switch` | shadow mode | §5.4 |
 | `sensor` | demand count, virtual temperature, virtual temperature (raw), virtual setpoint | °C where it applies, with `state_class: measurement` |
 | `binary_sensor` | boiler call | on when the computed command has `heat = true`. Attributes: the last command and `shadow`. Send timing is diagnostics-only to avoid recorder churn. |
@@ -321,128 +313,81 @@ applies in the current mode. Room climates accept `set_hvac_mode(heat)` as a no-
 with `ServiceValidationError`. A small feature-detected property bridge uses the native-temperature API in
 2026.11 and the original API in 2026.10, without triggering 2026.11 deprecations.
 
-**Diagnostics:** settings, rooms, profiles, mode, overrides, the last command and the timing of sends. No
+**Diagnostics:** settings, rooms, schedules, active_schedule_id, mode, overrides, the last command and the timing of sends. No
 credentials are involved.
 
 ## 8. Services and websocket API
 
-**Services** (`central_heating.*`, with the target given by `config_entry_id`):
+Services are registered once and resolve the loaded instance via config_entry_id per call.
 
 | Service | Fields |
 |---|---|
-| `set_mode` | `mode`, optional `until` (`away` only) |
-| `set_override` | `room` (a room's climate entity), `temperature`, optional `minutes` (otherwise the default) |
-| `clear_override` | `room` |
-| `apply_now` | none. Manual retry: rewrites all rooms in a writing mode, including active overrides with knob sync off, and resets retries. |
+| set_mode | mode: schedule/away/off/manual, aliases auto/summer; optional until for Away |
+| set_schedule | schedule: name or ID |
+| set_override | room climate entity, temperature, optional minutes |
+| clear_override | room climate entity |
+| apply_now | explicit retry of all room targets in a writing mode |
 
-Services are registered once in `async_setup` and resolve the loaded config entry on every call.
-Override `minutes` accepts 1–10080. Every field has a translated name and description.
+Websocket reads require any logged-in user; every write checks admin status on each call. Voluptuous validates
+wire shapes; configuration commands validate the whole detached candidate before a single save. Invalid inputs
+never partly apply. Commands are instance-scoped by config_entry_id.
 
-**Websocket commands.** Writes need an admin user; reads need any logged-in user.
-
-| Command | Purpose |
+| Command | Fields/behaviour |
 |---|---|
-| `central_heating/get` | all of the Store, plus live status: per room the current, desired and TRV targets, demanding, `sync_problem`; globally the demand count, virtual values, last command, shadow, mode |
-| `central_heating/subscribe` | pushes the same status object whenever it changes, at most once per second |
-| `central_heating/room/save`, `.../room/delete` | create, update or delete a room |
-| `central_heating/profile/save`, `.../profile/delete` | create or update a profile; delete one that no room uses |
-| `central_heating/settings/save` | partial update of `settings` |
-| `central_heating/mode/set`, `.../override/set`, `.../override/clear` | the same as the services |
+| get | without instance: entries and room_entity_ids; with instance: full status |
+| subscribe | initial status then changed snapshots, at most once a second |
+| schedule/save | schedule: name, optional existing id, optional rooms mapping room_id→{days}; create fills default weeks, update merges supplied room weeks atomically |
+| schedule/delete | schedule_id; active/last deletion refused |
+| schedule/activate | schedule_id |
+| room/save | room: optional existing id, name, trvs, optional area_id/enabled; optional copy_week_from_room only on create |
+| room/delete | room_id; removes all its weeks, entity-registry record and override |
+| settings/save | partial settings, optional shadow; one validated update |
+| mode/set | mode, optional until; optional schedule_id only in Schedule mode, applied together atomically |
+| override/set | room_id, temperature, optional kind and minutes; next_block cannot include minutes |
+| override/clear | room_id |
 
-Every command validates with voluptuous, returns structured errors, and never partly applies a change.
+There are no profile commands. Successful creates/updates return status and saved_id. Full status contains
+configuration (schedules, active_schedule_id, rooms, settings, overrides, shadow and mode), global demand/virtual
+values/command/last_sent, and rooms with current/desired/reported targets, demanding/sync_problem, override_until,
+next_change and next_target from the active room week. It also includes actual registry room_entity_ids and
+used_trv_ids across configured instances for the physical-TRV picker. Virtual Central Heating climates and TRVs
+owned by another instance are rejected under a shared assignment lock. Unreadable other-instance storage warns
+and skips for status/ordinary controls; room/save fails closed. Ownership reads never migrate/write other stores.
 
-Subscriptions retain cleanup callbacks in a set on the entry engine. One entry-unload hook drains this set;
-normal unsubscribe/disconnect removes its own callback. Unload/reload sends a final `{"unloaded": true}` event
-before ending the subscription. The server keeps only an inert no-op record for the old subscription
-ID until client unsubscribe or socket close; the card calls unsubscribe before resubscribing. This record
-holds no engine listener/timer/reference. A reload test sends the real HA websocket `unsubscribe_events`
-command after the terminal event, verifies success, then subscribes afresh. Frontend lifecycle tests verify
-that the old unsubscribe is called before the replacement subscription, including a terminal event arriving
-before subscribeMessage resolves. Socket reconnect is also safe: the connection's old subscriptions are
-explicitly released, and generation checks reject late callbacks/results from them; temporary late server
-subscriptions are unsubscribed as soon as their setup resolves. These are protocol/lifecycle tests, not a
-claim that the JavaScript HA websocket library itself is run in the test harness. The card reconnects with bounded backoff. Normal events are emitted only for
-a changed snapshot and at most once per second; repeated engine notifications with identical status are silent.
-
-Room deletion removes the room climate's entity-registry entry and any room override. Room saves reject virtual
-Central Heating climates (including renamed entities) and TRVs assigned to any other configured instance,
-including an unloaded instance's stored rooms. A shared ownership lock serializes cross-entry assignment.
-Other-entry lookups read raw storage envelopes without Store migration or writes. Unreadable stores are
-skipped with a warning for status and ordinary control; room/save fails closed with a clear ownership error.
-The full status includes `used_trv_ids` for other instances, for the card's physical-TRV picker.
-
-**Wire contract (part 1):** every instance-specific command carries `config_entry_id`. `get` without it lists
-loaded instances as `{entries: [{entry_id, title}], room_entity_ids: [...]}` for card configuration.
-`room_entity_ids` is also included in full status and lists every Central Heating climate entity from the
-entity registry across instances, including renamed and unloaded ones; the physical-TRV picker excludes them. Otherwise `get` and `subscribe`
-return `{config_entry_id, configuration, global, rooms}`: `configuration` is the Store JSON, `global` holds
-`demand_count`, `virtual_temp`, `virtual_temp_raw`, `virtual_setpoint`, `command`, `last_sent`, `shadow`, and
-`mode`; `rooms` maps room IDs to `name`, `entity_id` (the actual registry climate entity, or null),
-`current`, `desired`, `target`, `trvs` (entity-to-reported-target map),
-`demanding`, `sync_problem`, `override_until`, `next_change`, and `next_target`. `target` includes the reported
-TRV target in manual mode; `desired` remains `null` there.
-
-Room/profile saves carry a complete `room`/`profile` object in the Store shape, with an optional existing
-`id`; omit `id` to create a random identity. Successful saves return the status plus `saved_id`. Deletes
-carry `room_id`/`profile_id`. Settings saves carry partial `settings`, optional `shadow`, or both; these fields
-validate together before a single Store update. Mode and override writes carry the service fields, using
-`room_id` for websocket overrides. `override/set` also accepts an explicit `kind`: `next_block` ignores a
-configured duration default and cannot be combined with `minutes`; `duration` uses the supplied minutes or
-the configured duration. Omitting kind preserves the service/default behavior. Invalid schema and invalid-data errors leave Store and controls unchanged.
-All writes check the current user's admin status per call.
-
-A subscription returns a result acknowledgement followed by its initial status event. Later notifications
-coalesce to at most one event per second, with the latest snapshot. Unsubscribing, closing the socket, or
-unloading the entry removes the engine listener and any pending timer. Commands register once in `async_setup`.
+One unload hook drains the engine's subscription cleanup set. Disconnect/unsubscribe cancels listeners/timers;
+unload sends {unloaded:true} then leaves an inert no-op record until the client acknowledges unsubscribe_events
+or closes its socket. The card releases it before capped-backoff resubscription; generation checks discard late
+callbacks. Unchanged status snapshots are silent. No control actions are authorized by a subscription.
 
 ## 9. Card
 
-- **Built with** Lit and TypeScript, bundled with rollup into a single file,
-  `custom_components/central_heating/frontend/central-heating-card.js`. The built file is committed, because HACS
-  installs files as they are. CI checks that it matches the source.
-- **Loaded by the integration itself,** so no manual dashboard resource is needed:
-  `hass.http.async_register_static_paths([StaticPathConfig(...)])` and
-  `frontend.add_extra_js_url(hass, f"{url}?v={bundle_hash}")`.
-- **Card type:** `custom:central-heating-card`. It's registered in `window.customCards` with a small visual editor
-  that picks the config entry, if there's more than one.
-- **Cache key:** the bundle hash is computed from its actual bytes in an executor at setup; a manifest version
-  does not substitute for content identity.
-- **Styling:** Home Assistant theme variables only. It works at phone width and makes no external requests.
-- **Recovery:** an `unloaded` event or disconnected socket shows a reconnecting state and disables writes; the
-  card retries with 1/2/4/8/16/30-second capped backoff, cancels timers/listeners on removal, and re-subscribes on recovery.
-- **Locale:** displayed times follow `hass.locale.language`, `time_format` and time-zone preference. Date-picker
-  values are interpreted in HA's server time zone. See the HA frontend's `format_time.ts`/`use_am_pm.ts` conventions.
-- **Shadow handover:** separate action, never part of Save settings. Turning off requires an in-card confirmation:
-  “Central Heating will start sending commands to the boiler controller”. Turning on applies immediately.
+Lit/TypeScript, bundled with rollup to a committed local central-heating-card.js. The integration registers its
+static path once and calls frontend.add_extra_js_url with the bundle's SHA content hash. No external scripts,
+fonts, assets or requests. Card type custom:central-heating-card has an instance picker. HA theme variables,
+locale/time-format preferences and 390px layouts are supported. Date pickers use HA's server zone; Away explanations
+include a date outside today. An unload/disconnected socket greys out stale readings, disables writes and retries
+with 1/2/4/8/16/30-second capped backoff; removal cancels subscriptions/timers/listeners.
 
-**Tabs:**
-1. **Overview:**
-   - the mode selector (with an "until" date and time for away);
-   - the boiler status: calling for heat or not, the demand count, the virtual temperature and setpoint, and a
-     shadow-mode badge;
-   - a list of rooms with current and target temperature, a flame icon when demanding, status text naming any active override, and an override badge
-     ("22° until 18:00").
-   - Tapping a room opens a quick override with − and + buttons and a choice of "until the next change", 1 h, 2 h, 3 h or
-     a custom time, plus "back to schedule". The initial target is rounded/clamped to the 0.5 grid.
-2. **Schedules:**
-   - a list of profiles, and for each profile a week grid with 7 rows of 24 hours, the blocks coloured by
-     temperature;
-   - tap a block to change its temperature, drag a boundary to move it, tap empty space to split, and remove a
-     block (it merges with the one before);
-   - "copy day to …" with weekday checkboxes, and "copy profile";
-   - shows which rooms use the profile and their next effective change;
-   - explicit Save profile with an unsaved state and inline validation; selection/new/copy is disabled until
-     changes are saved or discarded. Server updates and tab changes do not replace a local draft;
-   - first starts stay at 00:00; boundaries snap to five minutes. Keyboard arrows adjust block targets
-     by 0.5°; boundary arrows move five minutes. A timeline strip splits at the tapped time;
-   - a labelled per-day time/temperature list is available everywhere and replaces the grid at phone width;
-   - copy day replaces checked weekdays in the draft. Copy profile creates a new unsaved identity.
-     Delete lists room references and refuses while used. Every save validates the schedule contract locally
-     and again on the server; shared valid/invalid fixtures run in TypeScript and through the real API.
-3. **Rooms:** add or edit a room: its name, its TRVs (an entity picker limited to `climate` entities that no other
-   room uses), its profile, an optional area, and whether it's enabled. TRVs used by other instances are excluded; missing assigned TRVs remain visible and selected until explicitly removed.
-4. **Settings:** frost temperature, hysteresis, away temperature, the default override length, room sync on knob
-   changes, and shadow mode.
+- Overview: mode name/explanation updates before Apply. Schedule reveals a whole-house schedule selector;
+  Apply sends both in one atomic mode/set. Successful Apply clears selection drafts. Away until shows/hides with
+  the selected mode. Boiler demand and room comfort, sync errors and overrides remain visible.
+- Schedules: choose a whole-house schedule, active badge, Create (copy an existing schedule, defaulting to active,
+  or blank 18° weeks for all rooms), Rename, protected Delete and explicit Activate. Select a room to edit its
+  week using the existing 7-row/24-hour coloured grid or narrow day-list fallback. Copy this room's week to checked
+  rooms in the selected schedule; Copy day remains. Explicit per-schedule Save/Discard; local drafts survive status
+  pushes/tab changes. Unsaved changes block schedule selection/activation. Room navigation retains edits for all rooms.
+  Typed times validate strictly between neighbours with localized errors, while pointer/keyboard boundary moves clamp
+  on the five-minute grid. Midnight is fixed. Focusable blocks use half-degree arrow keys. Structural day changes
+  clear rejected row inputs. API validation errors stay inline. A seeded per-room editor fuzz test preserves validation.
+- Rooms: name, physical TRVs, area/enabled; Add room offers Start its weeks from an existing room or 18° all day.
+  No profile association. Missing assigned TRVs remain shown and selected until removed; used/virtual TRVs are excluded.
+- Settings: frost, hysteresis, Away temperature, default override length, knob sync and retry interval. Shadow is
+  a separate action: turning off requires the in-card “Central Heating will start sending commands to the boiler
+  controller” confirmation. Turning on is immediate. Save settings never changes shadow.
+
+The demo uses generic schedules Winter/Autumn/Spring and invented rooms only. CI validates TypeScript, lint,
+Vitest, lockfile, pinned checksum-verified Node22 and byte-identical card/demo rebuilds. Shared room-week fixtures
+run through TypeScript validation and the real authenticated schedule/save API.
 
 ## 10. Repository layout
 
@@ -497,7 +442,7 @@ the entry (reloading can send `mode=off`). Prefix validation runs inside the ste
 - the config flow, including when MQTT is missing;
 - the entities created from a Store fixture;
 - **MQTT** with `mqtt_mock`: the exact topics and payloads; a send on change; the 30 s keep-alive; `tempSource` at
-  start; **nothing sent in shadow mode**; `summer` forces `off`; `mode = off` on unload;
+  start; **nothing sent in shadow mode**; Off forces boiler `off`; `mode = off` on unload;
 - schedule writes at a block start (with a frozen clock), with no write when the target is already correct;
 - retry and `sync_problem`; a knob change becomes an override; override expiry; a TRV coming back online;
 - websocket: an admin can write, a non-admin can't, and a bad input changes nothing;
@@ -506,22 +451,36 @@ the entry (reloading can send `mode=off`). Prefix validation runs inside the ste
 **CI** (Forgejo Actions) runs on pushes and pull requests: `ruff`, `pytest`, the card build, and a check that the
 committed bundle is up to date.
 
-## 12. Migration
+## 12. Migration and staged go-live
 
-Shadow mode is the safe install default and a one-click rollback for boiler output. Installation
-also starts in manual mode, leaving TRVs under their existing control. Room names, device identities
-and local migration plans belong in the user's own configuration, never in this repository.
+Before the legacy Store is rewritten, its original file bytes (the full HA envelope, names and unused
+profiles included) are saved unchanged to the sibling `.storage/central_heating.<entry_id>.pre_schedules`.
+HA's atomic write helper runs in an executor job with private permissions and fsync. Validation happens
+first; backup failure aborts migration before Store save. A differing existing backup is never overwritten.
+Unused profiles are warned by name and id. The new Store also enables `atomic_writes=True`.
 
-A staged go-live is recommended:
-1. Start boiler control in **manual** mode, with TRVs still driven by their existing schedules.
-   Turn shadow off through the card's explicit confirmation when ready to hand over boiler commands.
-   Disable the previous boiler controller so only one controller sends commands.
-2. Create and check weekly profiles, assign rooms, then disable the old room schedules (including TRVs'
-   own internal schedules) and select **auto**. Only one scheduler should drive each TRV.
-3. If needed, turn shadow on to pause boiler commands immediately. Manual mode also pauses room schedule
-   writes; shadow alone does not. Restore the previous controls deliberately before relying on them.
+Rollback: stop HA, install the previous integration version and restore each entry's `.pre_schedules`
+backup over its original Store file before starting HA. Alternatively restore a complete pre-upgrade
+HA backup. Downgrade alone cannot read the new Store; restoring discards post-upgrade changes.
+Schedule names may not equal another schedule's id; the active-schedule select maps exact option names
+to ids, avoiding ambiguous selection.
 
-Comparing demand, setpoints and boiler behaviour with a previous setup before handover is optional.
+
+Minor version 4 upgrades older version-1 Stores automatically on the next integration load. Existing room IDs,
+physical thermostats, settings, mode intent, shadow and overrides are preserved. One active Winter contains each
+room's previous weekly targets, copied independently from its old profile. auto/summer become schedule/off;
+services/API continue accepting the old values as aliases. Empty old installs get Winter with no rooms. Validation
+finishes before HA saves the converted data. Read-only cross-instance ownership reads convert only in memory.
+
+New installs start in shadow and Manual. A generic staged handover is recommended:
+1. Configure physical rooms while TRVs retain their previous targets. Start boiler control in Manual after
+   confirming shadow-off; only one boiler controller should send commands.
+2. Create whole-house schedules and each room's week, then activate the desired schedule. Disable TRVs' internal
+   schedules and any previous scheduler before selecting Schedule mode.
+3. Shadow is a one-click pause of boiler output; Manual also pauses room writes. Restore previous controls
+   deliberately when rolling back operating behaviour. Comparing with an earlier setup before handover is optional.
+
+No house-specific IDs, names, topics, addresses or migration plans belong in this repository.
 
 ## 13. Build plan (pull requests)
 
@@ -534,7 +493,7 @@ Each pull request includes its tests and passing CI. Each is reviewed independen
    - **2b:** room climates/control, overrides, retries, services and diagnostics;
    - each part includes its own integration tests and independently passing CI.
 3. **Websocket API and card, part 1** (split for independent review):
-   - **3a:** the complete authenticated websocket API, admin writes, profiles and subscriptions;
+   - **3a:** the complete authenticated websocket API, admin writes, schedule management and subscriptions;
    - **3b:** bundling/loading, Overview, Rooms and Settings, a profile-list placeholder and offline demo.
 4. **Card, part 2:** the Schedules tab and its week-grid editor.
 5. **Polish:** translations, README (installation, set-up, migration), Repairs issues, and an end-to-end check

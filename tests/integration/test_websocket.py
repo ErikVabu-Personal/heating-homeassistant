@@ -13,9 +13,10 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.central_heating.const import ADAPTER, DEFAULT_PREFIX, DOMAIN
-from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Profile, Room
+from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Room, Week
 from custom_components.central_heating.storage import HeatingStore, to_json
 from custom_components.central_heating.websocket import SCHEMAS, async_register_websocket
+from tests.schedules import seed
 
 pytestmark = pytest.mark.integration
 
@@ -26,11 +27,13 @@ async def entry(hass, mqtt_mock):
         domain=DOMAIN, title="Boiler A", data={"adapter": ADAPTER, "prefix": DEFAULT_PREFIX}
     )
     entry.add_to_hass(hass)
-    profile = Profile("Profile A", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
-    room = Room("Room A", ("climate.trv_a",), profile.id)
+    profile = Week("Week A", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
+    room = Room("Room A", ("climate.trv_a",))
     hass.states.async_set("climate.trv_a", "heat", {"current_temperature": 17, "temperature": 21})
     store = HeatingStore(hass, entry.entry_id)
-    await store.async_update(lambda data: replace(data, profiles=(profile,), rooms=(room,)))
+    await store.async_update(
+        lambda data: replace(data, schedules=(seed(profile, (room,)),), rooms=(room,))
+    )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     yield entry
@@ -43,14 +46,19 @@ async def client(hass, entry, hass_ws_client):
 
 
 async def command(client, entry, name, **data):
+    if name == "schedule/save" and "days" in data.get("schedule", {}):
+        value = dict(data["schedule"])
+        days = value.pop("days")
+        value["rooms"] = {entry.runtime_data.store.data.rooms[0].id: {"days": days}}
+        data["schedule"] = value
     await client.send_json_auto_id(
         {"type": f"{DOMAIN}/{name}", "config_entry_id": entry.entry_id, **data}
     )
     return await client.receive_json()
 
 
-def profile_payload(name="Profile B"):
-    return {"name": name, "days": {day: [{"start": "00:00", "target": 18}] for day in WEEKDAYS}}
+def schedule_payload(name="Week B"):
+    return {"name": name, "rooms": {}}
 
 
 async def test_get_discovery_and_live_status(client, entry):
@@ -73,18 +81,18 @@ async def test_get_discovery_and_live_status(client, entry):
 
 
 async def test_profile_room_crud_and_references(client, entry):
-    result = await command(client, entry, "profile/save", profile=profile_payload())
+    result = await command(client, entry, "schedule/save", schedule=schedule_payload())
     assert result["success"]
-    profile_id = result["result"]["saved_id"]
+    schedule_id = result["result"]["saved_id"]
     result = await command(
-        client, entry, "profile/save", profile={**profile_payload("Profile C"), "id": profile_id}
+        client, entry, "schedule/save", schedule={**schedule_payload("Week C"), "id": schedule_id}
     )
-    assert result["result"]["configuration"]["profiles"][profile_id]["name"] == "Profile C"
+    assert result["result"]["configuration"]["schedules"][schedule_id]["name"] == "Week C"
     result = await command(
         client,
         entry,
         "room/save",
-        room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": profile_id},
+        room={"name": "Room B", "trvs": ["climate.trv_b"]},
     )
     room_id = result["result"]["saved_id"]
     result = await command(
@@ -95,18 +103,19 @@ async def test_profile_room_crud_and_references(client, entry):
             "id": room_id,
             "name": "Room C",
             "trvs": ["climate.trv_b"],
-            "profile_id": profile_id,
             "area_id": "area_b",
             "enabled": False,
         },
     )
     assert result["result"]["configuration"]["rooms"][room_id]["name"] == "Room C"
-    result = await command(client, entry, "profile/delete", profile_id=profile_id)
+    assert (await command(client, entry, "schedule/activate", schedule_id=schedule_id))["success"]
+    result = await command(client, entry, "schedule/delete", schedule_id=schedule_id)
     assert not result["success"] and result["error"]["code"] == "invalid_data"
     result = await command(client, entry, "room/delete", room_id=room_id)
     assert room_id not in result["result"]["configuration"]["rooms"]
-    result = await command(client, entry, "profile/delete", profile_id=profile_id)
-    assert profile_id not in result["result"]["configuration"]["profiles"]
+    assert (await command(client, entry, "schedule/activate", schedule_id="winter"))["success"]
+    result = await command(client, entry, "schedule/delete", schedule_id=schedule_id)
+    assert schedule_id not in result["result"]["configuration"]["schedules"]
 
 
 async def test_settings_shadow_mode_override_and_clear(client, entry):
@@ -139,24 +148,24 @@ async def test_settings_shadow_mode_override_and_clear(client, entry):
         ("subscribe", {"config_entry_id": "missing"}),
         (
             "room/save",
-            {"room": {"name": "Room B", "trvs": ["climate.trv_a"], "profile_id": "missing"}},
+            {"room": {"name": "Room B", "trvs": ["climate.trv_a"]}},
         ),
         ("room/delete", {"room_id": "missing"}),
         (
-            "profile/save",
+            "schedule/save",
             {
-                "profile": {
-                    "name": "Profile B",
+                "schedule": {
+                    "name": "Week B",
                     "days": {day: [{"start": "00:05", "target": 18}] for day in WEEKDAYS},
                 }
             },
         ),
-        ("profile/delete", {"profile_id": "missing"}),
+        ("schedule/delete", {"schedule_id": "missing"}),
         (
             "settings/save",
             {"settings": {"frost_temperature": 8, "hysteresis": 0.15}, "shadow": False},
         ),
-        ("mode/set", {"mode": "auto", "until": "2027-01-01T12:00:00+00:00"}),
+        ("mode/set", {"mode": "schedule", "until": "2027-01-01T12:00:00+00:00"}),
         ("override/set", {"room_id": "missing", "temperature": 23}),
         ("override/clear", {"room_id": "missing"}),
     ],
@@ -176,8 +185,8 @@ async def test_invalid_semantics_are_atomic(client, entry, name, payload):
         ("subscribe", {"unexpected": True}),
         ("room/save", {"room": {"name": "Room B"}}),
         ("room/delete", {"room_id": 1}),
-        ("profile/save", {"profile": {"name": "Profile B", "days": {}}}),
-        ("profile/delete", {"profile_id": 1}),
+        ("schedule/save", {"schedule": {"name": "Week B", "days": {}}}),
+        ("schedule/delete", {"schedule_id": 1}),
         ("settings/save", {"settings": {"unexpected": True}}),
         ("mode/set", {"mode": "invalid"}),
         ("override/set", {"room_id": "room_a", "temperature": 23, "minutes": 10081}),
@@ -198,14 +207,13 @@ async def test_non_admin_cannot_write(hass, client, entry, hass_admin_user, name
     await hass.auth.async_update_user(hass_admin_user, group_ids=[GROUP_ID_USER])
     room = entry.runtime_data.store.data.rooms[0]
     payloads = {
-        "room/save": {
-            "room": {"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": room.profile_id}
-        },
+        "room/save": {"room": {"name": "Room B", "trvs": ["climate.trv_b"]}},
         "room/delete": {"room_id": room.id},
-        "profile/save": {"profile": profile_payload()},
-        "profile/delete": {"profile_id": room.profile_id},
+        "schedule/save": {"schedule": schedule_payload()},
+        "schedule/delete": {"schedule_id": entry.runtime_data.store.data.active_schedule_id},
+        "schedule/activate": {"schedule_id": entry.runtime_data.store.data.active_schedule_id},
         "settings/save": {"shadow": False},
-        "mode/set": {"mode": "auto"},
+        "mode/set": {"mode": "schedule"},
         "override/set": {"room_id": room.id, "temperature": 23},
         "override/clear": {"room_id": room.id},
     }
@@ -459,7 +467,7 @@ async def test_room_save_rejects_renamed_virtual_thermostat_atomically(hass, cli
         client,
         entry,
         "room/save",
-        room={"name": "Room B", "trvs": ["climate.renamed_virtual"], "profile_id": room.profile_id},
+        room={"name": "Room B", "trvs": ["climate.renamed_virtual"]},
     )
     assert not result["success"] and result["error"]["code"] == "invalid_data"
     assert engine.store.data is before
@@ -471,10 +479,12 @@ async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry
         domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
     )
     other.add_to_hass(hass)
-    profile = Profile("Profile B", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
-    room = Room("Room B", ("climate.shared_trv",), profile.id)
+    profile = Week("Week B", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
+    room = Room("Room B", ("climate.shared_trv",))
     store = HeatingStore(hass, other.entry_id)
-    await store.async_update(lambda data: replace(data, profiles=(profile,), rooms=(room,)))
+    await store.async_update(
+        lambda data: replace(data, schedules=(seed(profile, (room,)),), rooms=(room,))
+    )
     if not loaded:
         import json
         from pathlib import Path
@@ -498,7 +508,6 @@ async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry
         room={
             "name": "Room C",
             "trvs": ["climate.shared_trv"],
-            "profile_id": before.profiles[0].id,
         },
     )
     assert not result["success"] and result["error"]["code"] == "invalid_data"
@@ -525,17 +534,17 @@ async def test_profile_save_reapplies_rooms_to_physical_trv(hass, client, entry)
         )
 
     hass.services.async_register("climate", "set_temperature", apply)
-    assert (await command(client, entry, "mode/set", mode="auto"))["success"]
+    assert (await command(client, entry, "mode/set", mode="schedule"))["success"]
     await hass.async_block_till_done()
     assert hass.states.get("climate.trv_a").attributes["temperature"] == 18
     calls.clear()
-    profile = entry.runtime_data.store.data.profiles[0]
+    profile = entry.runtime_data.store.data.schedules[0]
     changed = {
         "id": profile.id,
         "name": profile.name,
         "days": {day: [{"start": "00:00", "target": 22}] for day in WEEKDAYS},
     }
-    result = await command(client, entry, "profile/save", profile=changed)
+    result = await command(client, entry, "schedule/save", schedule=changed)
     assert result["success"]
     await hass.async_block_till_done()
     assert hass.states.get("climate.trv_a").attributes["temperature"] == 22
@@ -559,7 +568,7 @@ async def test_partial_settings_preserve_all_unsupplied_values(client, entry):
     assert engine.store.data.shadow
 
 
-@pytest.mark.parametrize("kind", ["room", "profile"])
+@pytest.mark.parametrize("kind", ["room", "schedule"])
 async def test_saving_unknown_existing_id_is_not_create(client, entry, kind):
     before = entry.runtime_data.store.data
     payload = (
@@ -567,10 +576,9 @@ async def test_saving_unknown_existing_id_is_not_create(client, entry, kind):
             "id": "unknown_existing",
             "name": "Room B",
             "trvs": ["climate.trv_b"],
-            "profile_id": before.profiles[0].id,
         }
         if kind == "room"
-        else {**profile_payload(), "id": "unknown_existing"}
+        else {**schedule_payload(), "id": "unknown_existing"}
     )
     result = await command(client, entry, f"{kind}/save", **{kind: payload})
     assert not result["success"] and result["error"]["code"] == "invalid_data"
@@ -598,7 +606,12 @@ async def test_schedule_shared_frontend_fixtures_are_accepted_or_rejected_atomic
     cases = json.loads((Path(__file__).parents[1] / "fixtures/schedule_contract.json").read_text())
     for case in cases:
         before = entry.runtime_data.store.data
-        result = await command(client, entry, "profile/save", profile=case["profile"])
+        result = await command(
+            client,
+            entry,
+            "schedule/save",
+            schedule={**case["week"], "name": "Fixture " + case["name"]},
+        )
         assert result["success"] is case["valid"], case["name"]
         if not case["valid"]:
             assert entry.runtime_data.store.data is before
@@ -620,13 +633,13 @@ async def test_other_unreadable_store_does_not_break_status_subscribe_or_mode(
         assert (await client.receive_json())["type"] == "event"
         await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": result["id"]})
         assert (await client.receive_json())["success"]
-        assert (await command(client, entry, "mode/set", mode="auto"))["success"]
+        assert (await command(client, entry, "mode/set", mode="schedule"))["success"]
         before = entry.runtime_data.store.data
         result = await command(
             client,
             entry,
             "room/save",
-            room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": before.profiles[0].id},
+            room={"name": "Room B", "trvs": ["climate.trv_b"]},
         )
         assert not result["success"]
         assert "storage is unreadable" in result["error"]["message"]
@@ -673,7 +686,7 @@ async def test_read_only_store_rejects_newer_minor_version_l05(hass, client, ent
     path = Path(hass.config.path(".storage", f"{DOMAIN}.{other.entry_id}"))
     await hass.async_add_executor_job(lambda: path.parent.mkdir(parents=True, exist_ok=True))
     envelope = json.dumps(
-        {"version": 1, "minor_version": 4, "data": to_json(entry.runtime_data.store.data)}
+        {"version": 1, "minor_version": 5, "data": to_json(entry.runtime_data.store.data)}
     )
     await hass.async_add_executor_job(path.write_text, envelope)
     with pytest.raises(ValueError, match="Unsupported heating Store version"):
@@ -684,7 +697,7 @@ async def test_read_only_store_rejects_newer_minor_version_l05(hass, client, ent
         client,
         entry,
         "room/save",
-        room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": before.profiles[0].id},
+        room={"name": "Room B", "trvs": ["climate.trv_b"]},
     )
     assert not result["success"]
     assert "storage is unreadable" in result["error"]["message"]
@@ -693,7 +706,7 @@ async def test_read_only_store_rejects_newer_minor_version_l05(hass, client, ent
 
 
 @pytest.mark.parametrize("kind", ["next_block", "duration"])
-@pytest.mark.parametrize("mode", ["auto", "manual"])
+@pytest.mark.parametrize("mode", ["schedule", "manual"])
 async def test_profile_edit_recomputes_only_next_change_override_after_reload(
     hass, client, entry, freezer, kind, mode
 ):
@@ -725,7 +738,7 @@ async def test_profile_edit_recomputes_only_next_change_override_after_reload(
 
     hass.services.async_register("climate", "set_temperature", apply)
     payload = {
-        "id": room.profile_id,
+        "id": entry.runtime_data.store.data.active_schedule_id,
         "name": "Edited profile",
         "days": {
             day: [
@@ -736,7 +749,7 @@ async def test_profile_edit_recomputes_only_next_change_override_after_reload(
             for day in WEEKDAYS
         },
     }
-    result = await command(client, entry, "profile/save", profile=payload)
+    result = await command(client, entry, "schedule/save", schedule=payload)
     assert result["success"]
     after = entry.runtime_data.store.data.overrides[0]
     assert after.target == 23 and after.kind == kind
@@ -751,7 +764,7 @@ async def test_profile_edit_recomputes_only_next_change_override_after_reload(
     assert entry.runtime_data.store.data.overrides[0].until == after.until
 
 
-@pytest.mark.parametrize("mode", ["auto", "away", "summer", "manual"])
+@pytest.mark.parametrize("mode", ["schedule", "away", "off", "manual"])
 async def test_websocket_mode_values_stay_internal(client, entry, mode):
     result = await command(client, entry, "mode/set", mode=mode)
     assert result["success"]
@@ -777,11 +790,10 @@ async def test_o06_constant_week_cap_does_not_slide_on_later_reapply(client, ent
         )
     )["success"]
     freezer.tick(timedelta(hours=1))
-    payload = profile_payload()
-    payload["id"] = room.profile_id
-    for blocks in payload["days"].values():
-        blocks[0]["target"] = 19
-    assert (await command(client, entry, "profile/save", profile=payload))["success"]
+    payload = schedule_payload()
+    payload["id"] = entry.runtime_data.store.data.active_schedule_id
+    payload["days"] = {day: [{"start": "00:00", "target": 19}] for day in WEEKDAYS}
+    assert (await command(client, entry, "schedule/save", schedule=payload))["success"]
     expected = dt_util.utcnow() + timedelta(days=7)
     assert entry.runtime_data.store.data.overrides[0].until == expected
     for _ in range(3):
@@ -802,8 +814,8 @@ async def test_profile_rename_keeps_next_change_override_expiry(client, entry, f
     )["success"]
     original = entry.runtime_data.store.data.overrides[0].until
     freezer.tick(timedelta(minutes=30))
-    payload = profile_payload("Renamed profile")
-    payload["id"] = room.profile_id
-    assert (await command(client, entry, "profile/save", profile=payload))["success"]
+    payload = schedule_payload("Renamed profile")
+    payload["id"] = entry.runtime_data.store.data.active_schedule_id
+    assert (await command(client, entry, "schedule/save", schedule=payload))["success"]
     assert entry.runtime_data.store.data.overrides[0].until == original
-    assert entry.runtime_data.store.data.profiles[0].name == "Renamed profile"
+    assert entry.runtime_data.store.data.schedules[0].name == "Renamed profile"

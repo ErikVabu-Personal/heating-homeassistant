@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from dataclasses import asdict
-from uuid import uuid4
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -19,7 +18,8 @@ from .climate import RoomClimate
 from .const import DOMAIN
 from .demand import available_temperature
 from .schedule import WEEKDAYS
-from .storage import MODES, HeatingStore, from_json, to_json
+from .schedule_config import affected_rooms, edit
+from .storage import MODE_INPUTS, HeatingStore, to_json
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,11 +27,14 @@ _NAME = vol.All(str, vol.Length(min=1, max=200))
 _ID = vol.All(str, vol.Length(min=1, max=100))
 _NUMBER = vol.Any(int, float)
 _BLOCK = vol.Schema({vol.Required("start"): str, vol.Required("target"): _NUMBER})
-_PROFILE = vol.Schema(
+_WEEK = vol.Schema(
+    {vol.Required("days"): vol.Schema({vol.Required(day): [_BLOCK] for day in WEEKDAYS})}
+)
+_SCHEDULE = vol.Schema(
     {
         vol.Optional("id"): _ID,
         vol.Required("name"): _NAME,
-        vol.Required("days"): vol.Schema({vol.Required(day): [_BLOCK] for day in WEEKDAYS}),
+        vol.Optional("rooms"): {_ID: _WEEK},
     }
 )
 _ROOM = vol.Schema(
@@ -39,7 +42,7 @@ _ROOM = vol.Schema(
         vol.Optional("id"): _ID,
         vol.Required("name"): _NAME,
         vol.Required("trvs"): [cv.entity_id],
-        vol.Required("profile_id"): _ID,
+        vol.Optional("copy_week_from_room"): _ID,
         vol.Optional("area_id", default=None): vol.Any(None, str),
         vol.Optional("enabled", default=True): bool,
     }
@@ -60,8 +63,9 @@ SCHEMAS = {
     "subscribe": {vol.Required("config_entry_id"): _ID},
     "room/save": {vol.Required("config_entry_id"): _ID, vol.Required("room"): _ROOM},
     "room/delete": {vol.Required("config_entry_id"): _ID, vol.Required("room_id"): _ID},
-    "profile/save": {vol.Required("config_entry_id"): _ID, vol.Required("profile"): _PROFILE},
-    "profile/delete": {vol.Required("config_entry_id"): _ID, vol.Required("profile_id"): _ID},
+    "schedule/save": {vol.Required("config_entry_id"): _ID, vol.Required("schedule"): _SCHEDULE},
+    "schedule/delete": {vol.Required("config_entry_id"): _ID, vol.Required("schedule_id"): _ID},
+    "schedule/activate": {vol.Required("config_entry_id"): _ID, vol.Required("schedule_id"): _ID},
     "settings/save": {
         vol.Required("config_entry_id"): _ID,
         vol.Optional("settings"): _SETTINGS,
@@ -69,8 +73,9 @@ SCHEMAS = {
     },
     "mode/set": {
         vol.Required("config_entry_id"): _ID,
-        vol.Required("mode"): vol.In(MODES),
+        vol.Required("mode"): vol.In(MODE_INPUTS),
         vol.Optional("until"): vol.Any(None, cv.datetime),
+        vol.Optional("schedule_id"): _ID,
     },
     "override/set": {
         vol.Required("config_entry_id"): _ID,
@@ -186,7 +191,7 @@ async def _write(entry, command, msg):
         until = msg.get("until")
         if until is not None and until.tzinfo is None:
             until = until.replace(tzinfo=dt_util.get_default_time_zone())
-        await engine.async_set_mode(msg["mode"], until)
+        await engine.async_set_mode(msg["mode"], until, msg.get("schedule_id"))
         return None
     if command in ("override/set", "override/clear"):
         async with engine._room_lock:
@@ -205,34 +210,12 @@ async def _write(entry, command, msg):
 
     saved_id = None
 
-    # All fields (including settings+shadow) are decoded and validated together before one save.
+    before = engine.store.data
+
     def update(data):
         nonlocal saved_id
-        raw = to_json(data)
-        if command in ("room/save", "profile/save"):
-            kind = "room" if command == "room/save" else "profile"
-            value = dict(msg[kind])
-            saved_id = value.pop("id", None)
-            if saved_id is not None and saved_id not in raw[f"{kind}s"]:
-                raise ValueError(f"Unknown {kind}")
-            saved_id = saved_id or uuid4().hex
-            raw[f"{kind}s"][saved_id] = value
-        elif command == "room/delete":
-            if msg["room_id"] not in raw["rooms"]:
-                raise ValueError("Unknown room")
-            del raw["rooms"][msg["room_id"]]
-            raw["overrides"].pop(msg["room_id"], None)
-        elif command == "profile/delete":
-            if msg["profile_id"] not in raw["profiles"]:
-                raise ValueError("Unknown profile")
-            del raw["profiles"][msg["profile_id"]]
-        elif command == "settings/save":
-            if "settings" not in msg and "shadow" not in msg:
-                raise ValueError("Provide settings or shadow")
-            raw["settings"].update(msg.get("settings", {}))
-            if "shadow" in msg:
-                raw["shadow"] = msg["shadow"]
-        return from_json(raw)
+        candidate, saved_id = edit(data, command, msg)
+        return candidate
 
     async with engine.hass.data[f"{DOMAIN}_trv_lock"]:
         async with engine._lock:
@@ -245,6 +228,7 @@ async def _write(entry, command, msg):
                         await async_used_trv_ids(engine.hass, entry.entry_id, strict=True)
                     ):
                         raise ValueError("A thermostat already belongs to another heating instance")
+                before = engine.store.data
                 shadow_before = engine.store.data.shadow
                 await engine.store.async_update(update)
                 if shadow_before != engine.store.data.shadow:
@@ -258,7 +242,8 @@ async def _write(entry, command, msg):
         if entity_id is not None:
             registry.async_remove(entity_id)
     engine.other_entry_trvs = await async_used_trv_ids(engine.hass, entry.entry_id)
-    await engine.async_data_changed()
+    changed = affected_rooms(before, engine.store.data)
+    await engine.async_data_changed(room_ids=changed if command.startswith("schedule/") else None)
     return saved_id
 
 

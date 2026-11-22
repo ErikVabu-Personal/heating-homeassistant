@@ -16,9 +16,9 @@ describe("websocket client", () => {
       type: "central_heating/get",
       config_entry_id: "entry_a",
     });
-    await expect(client.write("mode/set", { mode: "auto" })).rejects.toThrow(
-      "Denied",
-    );
+    await expect(
+      client.write("mode/set", { mode: "schedule" }),
+    ).rejects.toThrow("Denied");
   });
   it("returns unsubscribe and preserves server messages", async () => {
     const unsubscribe = vi.fn();
@@ -61,11 +61,11 @@ it("write payload fields cannot replace command type or config entry identity (C
   await client.write("mode/set", {
     type: "central_heating/room/delete",
     config_entry_id: "entry_b",
-    mode: "auto",
+    mode: "schedule",
   });
   expect(callWS).toHaveBeenCalledWith({
     type: "central_heating/mode/set",
     config_entry_id: "entry_a",
-    mode: "auto",
+    mode: "schedule",
   });
 });

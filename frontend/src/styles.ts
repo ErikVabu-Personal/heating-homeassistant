@@ -359,7 +359,7 @@ export const styles = css`
     padding-top: 24px;
     border-top: 1px solid var(--divider-color);
   }
-  .profile-row {
+  .week-row {
     padding: 18px 0;
     border-bottom: 1px solid var(--divider-color);
     display: flex;

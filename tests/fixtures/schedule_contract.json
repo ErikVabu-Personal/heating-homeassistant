@@ -2,8 +2,7 @@
   {
     "name": "valid week",
     "valid": true,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -109,8 +108,7 @@
   {
     "name": "split move copy result",
     "valid": true,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -224,8 +222,7 @@
   {
     "name": "missing midnight",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -323,8 +320,7 @@
   {
     "name": "off grid",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -426,8 +422,7 @@
   {
     "name": "duplicate",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -529,8 +524,7 @@
   {
     "name": "unordered",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -636,8 +630,7 @@
   {
     "name": "off step",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -735,8 +728,7 @@
   {
     "name": "too cold",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -834,8 +826,7 @@
   {
     "name": "too hot",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -933,8 +924,7 @@
   {
     "name": "invalid clock",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {
@@ -1036,8 +1026,7 @@
   {
     "name": "empty day",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [],
         "tue": [
@@ -1130,8 +1119,7 @@
   {
     "name": "missing day",
     "valid": false,
-    "profile": {
-      "name": "Profile A",
+    "week": {
       "days": {
         "mon": [
           {

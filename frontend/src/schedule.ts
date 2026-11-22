@@ -1,4 +1,4 @@
-import type { Profile } from "./types";
+import type { Week } from "./types";
 export const weekdays = [
   "mon",
   "tue",
@@ -17,7 +17,7 @@ export const dayNames = [
   "Saturday",
   "Sunday",
 ];
-export type Block = Profile["days"][string][number];
+export type Block = Week["days"][string][number];
 export function minutes(start: string): number {
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start))
     throw new Error("Start time must be HH:MM.");
@@ -52,19 +52,26 @@ export function validateDay(blocks: Block[]) {
     previous = at;
   }
 }
-export function profilePayload(profile: Profile, id?: string) {
-  if (!profile.name.trim() || profile.name.length > 200)
-    throw new Error("Enter a profile name of 1–200 characters.");
+export function weekPayload(week: Week) {
   if (
-    Object.keys(profile.days).length !== 7 ||
-    weekdays.some((day) => !profile.days[day])
+    Object.keys(week.days).length !== 7 ||
+    weekdays.some((day) => !week.days[day])
   )
-    throw new Error("A profile needs all seven days.");
-  for (const day of weekdays) validateDay(profile.days[day]);
+    throw new Error("A week needs all seven days.");
+  for (const day of weekdays) validateDay(week.days[day]);
+  return { days: structuredClone(week.days) };
+}
+export function schedulePayload(
+  schedule: import("./types").Schedule,
+  id?: string,
+) {
+  if (!schedule.name.trim() || schedule.name.length > 200)
+    throw new Error("Enter a schedule name of 1–200 characters.");
+  for (const week of Object.values(schedule.rooms)) weekPayload(week);
   return {
     ...(id ? { id } : {}),
-    name: profile.name.trim(),
-    days: structuredClone(profile.days),
+    name: schedule.name.trim(),
+    rooms: structuredClone(schedule.rooms),
   };
 }
 export function splitBlock(blocks: Block[], at: number): Block[] {
@@ -96,12 +103,12 @@ export function moveBoundary(
   const start = clock(Math.max(min, Math.min(max, snap(at))));
   return blocks.map((b, i) => (i === index ? { ...b, start } : { ...b }));
 }
-export function copyDay(profile: Profile, from: string, to: string[]): Profile {
-  const result = structuredClone(profile);
+export function copyDay(week: Week, from: string, to: string[]): Week {
+  const result = structuredClone(week);
   for (const day of to) {
     if (!weekdays.includes(day as (typeof weekdays)[number]))
       throw new Error("Invalid weekday.");
-    result.days[day] = structuredClone(profile.days[from]);
+    result.days[day] = structuredClone(week.days[from]);
   }
   return result;
 }

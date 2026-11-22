@@ -1,7 +1,7 @@
 # Central Heating for Home Assistant
 
-A custom integration that runs a central-heating boiler from per-room radiator thermostats (TRVs), with weekly
-heating profiles and its own dashboard card.
+A custom integration that runs a central-heating boiler from per-room radiator thermostats (TRVs), with whole-house weekly
+schedules and its own dashboard card.
 
 **Minimum Home Assistant:** 2026.10.0.
 
@@ -23,13 +23,13 @@ Blocking tests use the supported test-package/Home Assistant pair; move that pai
 
 | Name | Value (services/API) | Behaviour |
 |---|---|---|
-| Schedule | `auto` | Rooms follow their weekly profiles. |
+| Schedule | `schedule` | Rooms follow their room weeks in the active whole-house schedule. |
 | Away | `away` | All rooms at the configured away temperature, optionally until an end time. |
-| Heating off | `summer` | Boiler heating off; radiators kept at the frost temperature. Hot water unaffected. |
+| Off | `off` | Boiler heating off; radiators kept at the frost temperature. Hot water unaffected. |
 | Manual | `manual` | Central Heating doesn't touch the radiators; the boiler still follows their demand. |
 
-Active overrides still take precedence in Schedule and Away. These names are display labels;
-Store values, select options, services and websocket commands keep `auto`, `away`, `summer`, `manual`.
+Active overrides still take precedence in Schedule and Away. Store/select values are `schedule`, `away`, `off`, `manual`.
+Services and the API also accept `auto` and `summer` as aliases for `schedule` and `off`.
 
 ## Card
 
@@ -43,8 +43,10 @@ config_entry_id: YOUR_CONFIG_ENTRY_ID
 ```
 
 Overview shows computed boiler demand and shadow mode, room targets, overrides and synchronization problems.
-Rooms edits physical thermostats and profiles; Settings edits tuning, retries and shadow. Schedules edits
-weekly profiles with a desktop grid and a phone-friendly day list, with explicit Save/Discard controls. Logged-in users can read; only administrators can write.
+Rooms edits physical thermostats and initial week seeding; Settings edits tuning, retries and shadow. Schedules edits
+whole-house schedules with one active plan. Select a room to edit its week using a desktop grid or phone-friendly
+day list. Create by copying a plan or blank 18° weeks; copy days or room weeks; Save/Discard explicitly.
+Active/last schedule deletion is protected. Logged-in users can read; only administrators can write.
 Shadow pauses boiler output, while manual mode pauses room writes.
 
 ### Review without Home Assistant
@@ -82,9 +84,32 @@ content hash so a changed build cannot keep the old cache key. Missing assigned 
 
 ### Thermostat schedules and staged handover
 
-Switch off the TRVs' own internal schedules before Central Heating drives room targets in auto mode.
+Switch off the TRVs' own internal schedules before Central Heating drives room targets in Schedule mode.
 Disable any previous room scheduler at the same time, so two schedulers do not fight each other.
 For a staged handover, start boiler control in manual mode while TRVs keep their previous schedules;
-then configure profiles, disable those schedules and switch to auto. Shadow mode is the safe install
+then configure room weeks, activate a schedule, disable those old schedules and switch to Schedule. Shadow mode is the safe install
 default and pauses boiler commands with one click; manual mode pauses room schedule writes too.
 Comparing with a previous setup is optional.
+
+### Upgrading
+
+Store minor version 4 turns the previous profiles into one active **Winter** schedule. Every room keeps a copy
+of its previous week, its thermostat assignments, settings and overrides (including expiry kind). Existing Manual
+and shadow settings stay as they are. The new **Active schedule** select and `central_heating.set_schedule`
+service choose a plan by name or id.
+
+The mode select now offers `schedule`/`away`/`off`/`manual`. Update automations using
+`select.select_option`: `auto` and `summer` no longer work as select options. The services and API
+still accept those aliases. Room climate attributes now expose `schedule` instead of `profile`.
+Schedule names cannot equal another schedule's id, preventing ambiguous service/API lookups.
+
+Before replacing a legacy Store, migration atomically saves its original bytes (including unused profiles
+and profile names) to `.storage/central_heating.<entry_id>.pre_schedules`. Unused profiles are listed by
+name and id in a warning. If this backup cannot be written, migration stops and leaves the original alone.
+The migrated Store uses atomic, fsynced writes too. Keep the backup until the upgrade is accepted.
+
+To roll back, stop Home Assistant, install the previous integration version, and restore the matching
+`.pre_schedules` file over `.storage/central_heating.<entry_id>` before starting Home Assistant.
+Restore every affected entry's file; changes made after migration will be lost on rollback. Alternatively,
+restore a complete pre-upgrade Home Assistant backup. Installing an older version alone cannot read the
+new schedule Store.
