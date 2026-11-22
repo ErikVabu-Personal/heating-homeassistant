@@ -14,18 +14,22 @@ const configuration: Configuration = {
   shadow: true,
   profiles: {
     profile_a: {
-      ...defaultProfile("Weekday comfort"),
+      ...defaultProfile("Profile A"),
       days: Object.fromEntries(
-        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day, i) => [
           day,
           [
             { start: "00:00", target: 18 },
-            { start: "06:00", target: 21 },
+            { start: i < 5 ? "06:00" : "08:00", target: 21 },
+            { start: "09:00", target: 18.5 },
+            { start: "17:00", target: 21 },
             { start: "22:00", target: 18 },
           ],
         ]),
       ),
     },
+    profile_b: defaultProfile("Profile B"),
+    profile_c: defaultProfile("Profile C"),
   },
   rooms: {
     room_a: {

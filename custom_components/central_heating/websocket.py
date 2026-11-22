@@ -1,6 +1,7 @@
 """Authenticated reads, admin-only atomic writes and throttled status subscriptions."""
 
 import asyncio
+import logging
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -19,6 +20,8 @@ from .const import DOMAIN
 from .demand import available_temperature
 from .schedule import WEEKDAYS
 from .storage import MODES, HeatingStore, from_json, to_json
+
+_LOGGER = logging.getLogger(__name__)
 
 _NAME = vol.All(str, vol.Length(min=1, max=200))
 _ID = vol.All(str, vol.Length(min=1, max=100))
@@ -97,20 +100,28 @@ def room_entity_ids(hass):
     )
 
 
-async def async_used_trv_ids(hass, entry_id):
-    """Include stored ownership of disabled/unloaded entries, not only live engines."""
+async def async_used_trv_ids(hass, entry_id, *, strict=False):
+    """Read ownership without migrating other stores; only room saves fail closed."""
     used = set()
     for other in hass.config_entries.async_entries(DOMAIN):
         if other.entry_id == entry_id:
             continue
-        runtime = getattr(other, "runtime_data", None)
-        if runtime is not None:
-            data = runtime.store.data
-        else:
-            store = HeatingStore(hass, other.entry_id)
-            await store.async_load()
-            data = store.data
-        used.update(trv for room in data.rooms for trv in room.trvs)
+        try:
+            runtime = getattr(other, "runtime_data", None)
+            data = (
+                runtime.store.data
+                if runtime is not None
+                else await HeatingStore.async_read_only(hass, other.entry_id)
+            )
+            used.update(trv for room in data.rooms for trv in room.trvs)
+        except OSError, ValueError, TypeError, KeyError, AttributeError:
+            if strict:
+                raise ValueError(
+                    "Cannot verify thermostat ownership: another heating instance's storage is unreadable"
+                ) from None
+            _LOGGER.warning(
+                "Skipping unreadable thermostat ownership for heating entry %s", other.entry_id
+            )
     return sorted(used)
 
 
@@ -230,7 +241,9 @@ async def _write(entry, command, msg):
                     trvs = set(msg["room"]["trvs"])
                     if trvs.intersection(room_entity_ids(engine.hass)):
                         raise ValueError("Virtual room climates cannot be used as thermostats")
-                    if trvs.intersection(await async_used_trv_ids(engine.hass, entry.entry_id)):
+                    if trvs.intersection(
+                        await async_used_trv_ids(engine.hass, entry.entry_id, strict=True)
+                    ):
                         raise ValueError("A thermostat already belongs to another heating instance")
                 shadow_before = engine.store.data.shadow
                 await engine.store.async_update(update)
@@ -301,7 +314,9 @@ def _subscribe(hass, connection, msg, entry):
                 connection.send_event(msg["id"], {"unloaded": True})
         finally:
             unsubscribe()
-            connection.subscriptions.pop(msg["id"], None)
+            # Keep the inert unsubscribe record until the HA client acknowledges it.
+            # No engine, timer or unload hook remains attached to this record.
+            connection.subscriptions[msg["id"]] = lambda: None
 
     engine._subscription_cleanups.add(entry_unloaded)
     connection.send_result(msg["id"])

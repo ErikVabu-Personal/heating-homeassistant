@@ -121,6 +121,30 @@ function defaultProfile(name = "Default profile") {
         ])),
     };
 }
+/** Weekly starts are wall-clock values, independent of a date or DST offset. */
+function scheduleTime(value, locale) {
+    return time(`2000-01-01T${value}:00Z`, "UTC", {
+        ...locale,
+        language: locale?.language ?? new Intl.DateTimeFormat().resolvedOptions().locale,
+        time_format: locale?.time_format ?? "language",
+        time_zone: "server",
+    });
+}
+function parseScheduleTime(value, locale) {
+    const trimmed = value.trim();
+    // Also accept the explicit 24-hour storage notation when typed or pasted.
+    if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed))
+        return trimmed;
+    const normalize = (text) => text.toLocaleLowerCase(locale?.language).replace(/\s/g, "");
+    for (let minute = 0; minute < 1440; minute += 5) {
+        const clock = `${Math.floor(minute / 60)
+            .toString()
+            .padStart(2, "0")}:${(minute % 60).toString().padStart(2, "0")}`;
+        if (normalize(scheduleTime(clock, locale)) === normalize(trimmed))
+            return clock;
+    }
+    throw new Error("Enter a valid time on the five-minute grid.");
+}
 
 const styles = i$3 `
   :host {
@@ -249,6 +273,11 @@ const styles = i$3 `
   main {
     padding: 24px 28px 28px;
     min-height: 380px;
+  }
+  .stale {
+    filter: grayscale(1);
+    opacity: 0.45;
+    pointer-events: none;
   }
   .grid {
     display: grid;
@@ -622,6 +651,896 @@ const styles = i$3 `
   }
 `;
 
+const weekdays = [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+    "sun",
+];
+const dayNames = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+function minutes(start) {
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start))
+        throw new Error("Start time must be HH:MM.");
+    const [h, m] = start.split(":").map(Number);
+    return h * 60 + m;
+}
+function clock(value) {
+    return `${Math.floor(value / 60)
+        .toString()
+        .padStart(2, "0")}:${(value % 60).toString().padStart(2, "0")}`;
+}
+function snap(value) {
+    if (!Number.isFinite(value))
+        throw new Error("Choose a valid time.");
+    return Math.max(0, Math.min(1435, Math.round(value / 5) * 5));
+}
+function validateDay(blocks) {
+    if (!blocks.length || blocks[0].start !== "00:00")
+        throw new Error("Each day must start at 00:00.");
+    let previous = -1;
+    for (const block of blocks) {
+        const at = minutes(block.start);
+        if (at % 5)
+            throw new Error("Times must be on the five-minute grid.");
+        if (at <= previous)
+            throw new Error("Block starts must be strictly increasing.");
+        if (!Number.isFinite(block.target) ||
+            block.target < 5 ||
+            block.target > 30 ||
+            !Number.isInteger(block.target * 2))
+            throw new Error("Temperature must be 5–30° in 0.5° steps.");
+        previous = at;
+    }
+}
+function profilePayload(profile, id) {
+    if (!profile.name.trim() || profile.name.length > 200)
+        throw new Error("Enter a profile name of 1–200 characters.");
+    if (Object.keys(profile.days).length !== 7 ||
+        weekdays.some((day) => !profile.days[day]))
+        throw new Error("A profile needs all seven days.");
+    for (const day of weekdays)
+        validateDay(profile.days[day]);
+    return {
+        ...(id ? { id } : {}),
+        name: profile.name.trim(),
+        days: structuredClone(profile.days),
+    };
+}
+function splitBlock(blocks, at) {
+    const start = clock(snap(at));
+    if (blocks.some((b) => b.start === start))
+        throw new Error("A block already starts here.");
+    const previous = [...blocks].reverse().find((b) => b.start < start);
+    if (!previous)
+        throw new Error("The first block stays at 00:00.");
+    return [
+        ...blocks.map((b) => ({ ...b })),
+        { start, target: previous.target },
+    ].sort((a, b) => a.start.localeCompare(b.start));
+}
+function removeBlock(blocks, index) {
+    if (index <= 0 || index >= blocks.length)
+        throw new Error("The first block stays at 00:00.");
+    return blocks.filter((_, i) => i !== index).map((b) => ({ ...b }));
+}
+function moveBoundary(blocks, index, at) {
+    if (index <= 0 || index >= blocks.length)
+        throw new Error("The first block stays at 00:00.");
+    const min = minutes(blocks[index - 1].start) + 5;
+    const max = index + 1 < blocks.length ? minutes(blocks[index + 1].start) - 5 : 1435;
+    const start = clock(Math.max(min, Math.min(max, snap(at))));
+    return blocks.map((b, i) => (i === index ? { ...b, start } : { ...b }));
+}
+function copyDay(profile, from, to) {
+    const result = structuredClone(profile);
+    for (const day of to) {
+        if (!weekdays.includes(day))
+            throw new Error("Invalid weekday.");
+        result.days[day] = structuredClone(profile.days[from]);
+    }
+    return result;
+}
+function temperatureStep(value, step) {
+    return Math.max(5, Math.min(30, Math.round(value * 2 + step) / 2));
+}
+
+class HeatingSchedules extends i {
+    constructor() {
+        super(...arguments);
+        this.writable = false;
+        this.selected = "";
+        this.error = "";
+        this.saving = false;
+        this.block = null;
+        this.copyFrom = null;
+        this.deleting = false;
+        this.baseline = "";
+        this.timeInputs = new Map();
+        this.entryId = "";
+    }
+    static { this.properties = {
+        status: { attribute: false },
+        hass: { attribute: false },
+        writable: { type: Boolean },
+        selected: { state: true },
+        draft: { state: true },
+        error: { state: true },
+        saving: { state: true },
+        block: { state: true },
+        copyFrom: { state: true },
+        deleting: { state: true },
+    }; }
+    static { this.styles = [
+        styles,
+        i$3 `
+      :host {
+        container-type: inline-size;
+      }
+      .profile-tools {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .profile-tools select {
+        width: auto;
+        flex: 1;
+        min-width: 130px;
+      }
+      .week {
+        border: 1px solid var(--divider-color);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .axis {
+        display: flex;
+        justify-content: space-between;
+        margin-left: 88px;
+        font-size: 12px;
+        color: var(--secondary-text-color);
+      }
+      .day {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr);
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+      }
+      .day-label {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .track {
+        position: relative;
+        height: 70px;
+        min-width: 0;
+      }
+      .schedule-block {
+        position: absolute;
+        top: 0;
+        height: 44px;
+        border-radius: 5px;
+        padding: 0 3px;
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--divider-color);
+        color: var(--primary-text-color);
+      }
+      .boundary {
+        position: absolute;
+        top: 0;
+        width: 24px;
+        height: 44px;
+        padding: 0;
+        transform: translateX(-50%);
+        cursor: ew-resize;
+        background: transparent;
+        border: 0;
+        touch-action: none;
+        z-index: 1;
+      }
+      .boundary::after {
+        content: "";
+        display: block;
+        height: 25px;
+        width: 3px;
+        margin: auto;
+        background: var(--primary-text-color);
+        border-radius: 3px;
+      }
+      .split-time {
+        position: absolute;
+        top: 48px;
+        width: 100%;
+        height: 20px;
+        min-height: 20px;
+        padding: 0;
+        border: 1px dashed var(--divider-color);
+        background: var(--secondary-background-color);
+        border-radius: 4px;
+        font-size: 11px;
+        color: var(--secondary-text-color);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin: 16px 0;
+        font-size: 12px;
+      }
+      .swatch {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 1px solid var(--divider-color);
+        border-radius: 3px;
+        margin-right: 5px;
+        vertical-align: middle;
+      }
+      .edit-panel {
+        margin-top: 18px;
+        background: var(--secondary-background-color);
+      }
+      .day-list {
+        margin-top: 20px;
+      }
+      details {
+        border-bottom: 1px solid var(--divider-color);
+        padding: 8px 0;
+      }
+      summary {
+        cursor: pointer;
+        min-height: 44px;
+        padding: 10px 0;
+        font-weight: 600;
+      }
+      .block-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 8px;
+        margin: 10px 0;
+        align-items: end;
+      }
+      .block-row .field {
+        margin: 0;
+        min-width: 0;
+      }
+      .block-row button {
+        padding: 8px;
+      }
+      .inline-error {
+        color: var(--error-color);
+        padding: 12px;
+        border: 1px solid var(--error-color);
+        border-radius: 8px;
+        margin-top: 16px;
+      }
+      .unsaved {
+        color: var(--warning-color);
+      }
+      .profile-meta {
+        margin: 12px 0;
+      }
+      .profile-meta p {
+        margin: 4px 0;
+      }
+      .toolbar {
+        flex-wrap: wrap;
+      }
+      @container (max-width:600px) {
+        .week {
+          display: none;
+        }
+        .block-row {
+          grid-template-columns: 1fr 1fr;
+        }
+        .block-row button {
+          grid-column: 2;
+        }
+        .profile-tools button {
+          flex: 1;
+        }
+        .edit-panel .form-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    `,
+    ]; }
+    willUpdate() {
+        if (this.entryId !== this.status?.config_entry_id) {
+            this.entryId = this.status?.config_entry_id ?? "";
+            this.draft = undefined;
+            this.selected = "";
+            this.block = null;
+            this.error = "";
+            this.copyFrom = null;
+            this.deleting = false;
+            this.saving = false;
+        }
+        if (!this.draft && this.status) {
+            const id = Object.keys(this.status.configuration.profiles)[0];
+            if (id)
+                this.load(id);
+        }
+    }
+    get dirty() {
+        return !!this.draft && JSON.stringify(this.draft) !== this.baseline;
+    }
+    load(id) {
+        const source = this.status?.configuration.profiles[id];
+        if (!source)
+            return;
+        this.timeInputs.clear();
+        this.selected = id;
+        this.draft = structuredClone(source);
+        this.baseline = JSON.stringify(this.draft);
+        this.error = "";
+        this.block = null;
+        this.deleting = false;
+    }
+    newProfile(copy = false) {
+        this.selected = "";
+        this.draft =
+            copy && this.draft
+                ? structuredClone(this.draft)
+                : defaultProfile("New profile");
+        if (copy)
+            this.draft.name += " copy";
+        this.baseline = "";
+        this.error = "";
+        this.block = null;
+        this.deleting = false;
+    }
+    change(day, blocks) {
+        if (!this.draft || !this.writable || this.saving)
+            return;
+        this.draft = { ...this.draft, days: { ...this.draft.days, [day]: blocks } };
+        this.error = "";
+    }
+    editTime(day, index, event) {
+        const input = event.target;
+        const key = `${day}-${index}`;
+        try {
+            const at = minutes(parseScheduleTime(input.value, this.hass?.locale));
+            if (at % 5)
+                throw new Error("Times must be on the five-minute grid.");
+            const blocks = moveBoundary(this.draft.days[day], index, at);
+            this.timeInputs.delete(key);
+            input.setCustomValidity("");
+            this.change(day, blocks);
+        }
+        catch (error) {
+            this.timeInputs.set(key, input.value);
+            this.error = error instanceof Error ? error.message : String(error);
+            input.setCustomValidity(this.error);
+        }
+    }
+    attempt(action) {
+        try {
+            action();
+            this.error = "";
+        }
+        catch (e) {
+            this.error = e instanceof Error ? e.message : String(e);
+        }
+    }
+    color(target) {
+        const weight = Math.max(12, Math.min(65, (target - 5) * 2.2));
+        return `color-mix(in srgb, var(--${target < 19 ? "primary" : "warning"}-color) ${weight}%, var(--card-background-color))`;
+    }
+    async save() {
+        if (!this.draft || !this.writable || this.saving || !this.saveProfile)
+            return;
+        const entry = this.entryId;
+        this.saving = true;
+        this.error = "";
+        try {
+            if (this.timeInputs.size)
+                throw new Error("Correct invalid start times before saving.");
+            const payload = profilePayload(this.draft, this.selected || undefined);
+            const id = await this.saveProfile(payload);
+            if (entry !== this.entryId)
+                return;
+            this.selected = id || this.selected;
+            this.draft = { name: payload.name, days: payload.days };
+            this.baseline = JSON.stringify(this.draft);
+        }
+        catch (e) {
+            if (entry === this.entryId)
+                this.error = e instanceof Error ? e.message : String(e);
+        }
+        finally {
+            if (entry === this.entryId)
+                this.saving = false;
+        }
+    }
+    async showCopy(day) {
+        this.copyFrom = day;
+        await this.updateComplete;
+        this.renderRoot.querySelector("#copy-day")?.showModal();
+    }
+    drag(event, day, index) {
+        if (!this.writable || this.saving)
+            return;
+        event.preventDefault();
+        const handle = event.currentTarget;
+        const rect = handle.parentElement.getBoundingClientRect();
+        handle.setPointerCapture(event.pointerId);
+        const move = (e) => {
+            if (e.pointerId !== event.pointerId)
+                return;
+            this.change(day, moveBoundary(this.draft.days[day], index, ((e.clientX - rect.left) / rect.width) * 1440));
+        };
+        const end = (e) => {
+            if (e.pointerId !== event.pointerId)
+                return;
+            handle.removeEventListener("pointermove", move);
+            handle.removeEventListener("pointerup", end);
+            handle.removeEventListener("pointercancel", end);
+            handle.removeEventListener("lostpointercapture", end);
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", end);
+        handle.addEventListener("pointercancel", end);
+        handle.addEventListener("lostpointercapture", end);
+    }
+    render() {
+        const p = this.draft;
+        const profiles = this.status?.configuration.profiles ?? {};
+        const rooms = Object.entries(this.status?.configuration.rooms ?? {}).filter(([, r]) => r.profile_id === this.selected);
+        const disabled = !this.writable || this.saving;
+        const next = rooms
+            .map(([id]) => this.status?.rooms[id]?.next_change)
+            .filter((x) => !!x)
+            .sort()[0];
+        return b `<div class="toolbar">
+        <div>
+          <h2>Weekly schedules</h2>
+          <p class="muted">A comfortable rhythm for every day.</p>
+        </div>
+        ${this.dirty
+            ? b `<span class="badge unsaved" role="status"
+              >Unsaved changes</span
+            >`
+            : b `<span class="badge">Saved profiles</span>`}
+      </div>
+      <div class="profile-tools">
+        <select
+          aria-label="Heating profile"
+          .value=${this.selected}
+          ?disabled=${this.dirty || this.saving}
+          @change=${(e) => this.load(e.target.value)}
+        >
+          ${!this.selected
+            ? b `<option value="">New profile</option>`
+            : A}
+          ${Object.entries(profiles).map(([id, p]) => b `<option value=${id}>${p.name}</option>`)}
+        </select>
+        <button
+          ?disabled=${disabled || this.dirty}
+          @click=${() => this.newProfile()}
+        >
+          Create profile
+        </button>
+        <button
+          ?disabled=${disabled || this.dirty || !p}
+          @click=${() => this.newProfile(true)}
+        >
+          Copy profile
+        </button>
+      </div>
+      ${p
+            ? b `<fieldset ?disabled=${disabled}>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="profile-name">Profile name</label
+                  ><input
+                    id="profile-name"
+                    maxlength="200"
+                    .value=${p.name}
+                    @input=${(e) => {
+                this.draft = {
+                    ...p,
+                    name: e.target.value,
+                };
+            }}
+                  />
+                </div>
+                <div class="profile-meta">
+                  <p>
+                    <strong>Used by:</strong> ${rooms
+                .map(([, r]) => r.name)
+                .join(", ") || "No rooms assigned"}
+                  </p>
+                  <small
+                    >Next room change:
+                    ${next
+                ? time(next, this.hass?.config?.time_zone, this.hass?.locale)
+                : "No upcoming change"}</small
+                  >
+                </div>
+              </div>
+              <div class="legend" aria-label="Temperature legend">
+                ${[10, 18, 21, 25].map((t) => b `<span
+                      ><span
+                        class="swatch"
+                        style=${`background:${this.color(t)}`}
+                      ></span
+                      >${temperature(t)}</span
+                    >`)}
+              </div>
+              <div class="week" aria-label="Weekly schedule grid">
+                <div class="axis">
+                  <span>00:00</span><span>06:00</span><span>12:00</span
+                  ><span>18:00</span><span>24:00</span>
+                </div>
+                ${weekdays.map((day, i) => b `<div class="day">
+                      <span class="day-label">${dayNames[i]}</span>
+                      <div class="track">
+                        ${p.days[day].map((b$1, j) => {
+                const start = minutes(b$1.start), end = j + 1 < p.days[day].length
+                    ? minutes(p.days[day][j + 1].start)
+                    : 1440;
+                return b ` <button
+                              class="schedule-block"
+                              style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b$1.target)}`}
+                              aria-label=${`${dayNames[i]} ${b$1.start} to ${clock(end)} · ${temperature(b$1.target)}. Arrow keys change temperature.`}
+                              @click=${() => {
+                    this.block = { day, index: j };
+                }}
+                              @keydown=${(e) => {
+                    if ([
+                        "ArrowUp",
+                        "ArrowDown",
+                        "ArrowLeft",
+                        "ArrowRight",
+                    ].includes(e.key)) {
+                        e.preventDefault();
+                        this.change(day, p.days[day].map((x, k) => k === j
+                            ? {
+                                ...x,
+                                target: temperatureStep(x.target, [
+                                    "ArrowUp",
+                                    "ArrowRight",
+                                ].includes(e.key)
+                                    ? 1
+                                    : -1),
+                            }
+                            : x));
+                    }
+                }}
+                            >
+                              ${temperature(b$1.target)}
+                            </button>
+                            ${j
+                    ? b `<button
+                                  class="boundary"
+                                  style=${`left:${start / 14.4}%`}
+                                  aria-label=${`Move ${dayNames[i]} boundary at ${b$1.start}`}
+                                  @pointerdown=${(e) => this.drag(e, day, j)}
+                                  @keydown=${(e) => {
+                        if (["ArrowLeft", "ArrowRight"].includes(e.key)) {
+                            e.preventDefault();
+                            this.change(day, moveBoundary(p.days[day], j, start +
+                                (e.key === "ArrowRight" ? 5 : -5)));
+                        }
+                    }}
+                                ></button>`
+                    : A}`;
+            })}
+                        <button
+                          class="split-time"
+                          aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
+                          @click=${(e) => this.attempt(() => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const at = e.detail === 0
+                    ? 720
+                    : ((e.clientX - rect.left) / rect.width) *
+                        1440;
+                this.change(day, splitBlock(p.days[day], at));
+            })}
+                        >
+                          + Tap timeline to split
+                        </button>
+                      </div>
+                    </div>`)}
+              </div>
+              ${this.blockEditor()}
+              <div class="day-list">
+                <h3>Edit times & copy days</h3>
+                <p class="muted">
+                  Five-minute times, half-degree temperatures. Each day starts
+                  at 00:00.
+                </p>
+                ${weekdays.map((day, i) => b `<details>
+                      <summary>
+                        ${dayNames[i]} · ${p.days[day].length} blocks
+                      </summary>
+                      ${p.days[day].map((b$1, j) => b `<div class="block-row">
+                            <div class="field">
+                              <label for=${`start-${day}-${j}`}
+                                >Start time</label
+                              ><input
+                                id=${`start-${day}-${j}`}
+                                type="text"
+                                inputmode="text"
+                                .value=${this.timeInputs.get(`${day}-${j}`) ??
+                scheduleTime(b$1.start, this.hass?.locale)}
+                                ?disabled=${!j}
+                                @change=${(e) => this.editTime(day, j, e)}
+                              />
+                            </div>
+                            <div class="field">
+                              <label for=${`target-${day}-${j}`}
+                                >Temperature °C</label
+                              ><input
+                                id=${`target-${day}-${j}`}
+                                type="number"
+                                min="5"
+                                max="30"
+                                step="0.5"
+                                .value=${String(b$1.target)}
+                                @change=${(e) => this.change(day, p.days[day].map((x, k) => k === j
+                ? {
+                    ...x,
+                    target: Number(e.target
+                        .value),
+                }
+                : x))}
+                              />
+                            </div>
+                            <button
+                              ?disabled=${!j}
+                              @click=${() => {
+                this.change(day, removeBlock(p.days[day], j));
+                this.block = null;
+            }}
+                            >
+                              Remove<span class="sr-only">
+                                ${dayNames[i]} ${b$1.start}</span
+                              >
+                            </button>
+                          </div>`)}
+                      <div class="actions">
+                        <button
+                          @click=${() => this.attempt(() => {
+                this.change(day, splitBlock(p.days[day], minutes(p.days[day].at(-1).start) + 5));
+            })}
+                        >
+                          Add block</button
+                        ><button @click=${() => this.showCopy(day)}>
+                          Copy day to…
+                        </button>
+                      </div>
+                    </details>`)}
+              </div>
+            </fieldset>
+            ${this.error
+                ? b `<div class="inline-error" role="alert">${this.error}</div>`
+                : A}
+            <div class="actions">
+              <button
+                class="danger"
+                ?disabled=${disabled || !this.selected || this.dirty}
+                @click=${() => {
+                this.deleting = true;
+            }}
+              >
+                Delete profile</button
+              ><button
+                ?disabled=${this.saving || !this.dirty}
+                @click=${() => {
+                const id = this.selected || Object.keys(profiles)[0];
+                if (id)
+                    this.load(id);
+                else {
+                    this.draft = undefined;
+                    this.baseline = "";
+                }
+            }}
+              >
+                Discard changes</button
+              ><button
+                class="primary"
+                id="save-profile"
+                ?disabled=${disabled || !this.dirty}
+                @click=${() => this.save()}
+              >
+                ${this.saving ? "Saving…" : "Save profile"}
+              </button>
+            </div>
+            ${this.deleting
+                ? b `<div class="delete-confirm" role="alert">
+                  <h3>Delete ${p.name}?</h3>
+                  ${rooms.length
+                    ? b `<p>
+                        Cannot delete a profile used by:
+                        ${rooms.map(([, r]) => r.name).join(", ")}. Assign those
+                        rooms to another profile first.
+                      </p>`
+                    : b `<p>This removes the saved weekly profile.</p>`}
+                  <div class="actions">
+                    <button
+                      @click=${() => {
+                    this.deleting = false;
+                }}
+                    >
+                      Keep profile</button
+                    >${!rooms.length
+                    ? b `<button
+                          class="danger"
+                          ?disabled=${disabled}
+                          @click=${async () => {
+                        if (!this.deleteProfile || disabled)
+                            return;
+                        this.saving = true;
+                        this.error = "";
+                        try {
+                            await this.deleteProfile(this.selected);
+                            this.selected = "";
+                            this.draft = undefined;
+                            this.deleting = false;
+                        }
+                        catch (e) {
+                            this.error =
+                                e instanceof Error ? e.message : String(e);
+                        }
+                        finally {
+                            this.saving = false;
+                        }
+                    }}
+                        >
+                          Confirm delete
+                        </button>`
+                    : A}
+                  </div>
+                </div>`
+                : A} `
+            : b `<div class="empty">
+            No profiles yet. Create a profile to plan the week.
+          </div>`}
+      ${this.copyDialog()}`;
+    }
+    blockEditor() {
+        if (!this.block || !this.draft)
+            return A;
+        const { day, index } = this.block;
+        const b$1 = this.draft.days[day][index];
+        if (!b$1)
+            return A;
+        return b `<section
+      class="panel edit-panel"
+      aria-label="Edit schedule block"
+    >
+      <div class="toolbar">
+        <h3>
+          ${dayNames[weekdays.indexOf(day)]} ·
+          ${b$1.start}
+        </h3>
+        <button
+          aria-label="Close block editor"
+          @click=${() => {
+            this.block = null;
+        }}
+        >
+          Close
+        </button>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="block-start">Start time</label
+          ><input
+            id="block-start"
+            type="text"
+            inputmode="text"
+            .value=${this.timeInputs.get(`${day}-${index}`) ??
+            scheduleTime(b$1.start, this.hass?.locale)}
+            ?disabled=${!index}
+            @change=${(e) => this.editTime(day, index, e)}
+          />
+        </div>
+        <div class="field">
+          <label for="block-target">Temperature °C</label
+          ><input
+            id="block-target"
+            type="number"
+            min="5"
+            max="30"
+            step="0.5"
+            .value=${String(b$1.target)}
+            @change=${(e) => this.change(day, this.draft.days[day].map((x, j) => j === index
+            ? {
+                ...x,
+                target: Number(e.target.value),
+            }
+            : x))}
+          />
+        </div>
+      </div>
+      <div class="actions">
+        <button
+          ?disabled=${!index}
+          @click=${() => {
+            this.change(day, removeBlock(this.draft.days[day], index));
+            this.block = null;
+        }}
+        >
+          Remove block</button
+        ><button @click=${() => this.showCopy(day)}>Copy day to…</button>
+      </div>
+    </section>`;
+    }
+    copyDialog() {
+        if (!this.copyFrom)
+            return A;
+        return b `<dialog
+      id="copy-day"
+      @close=${() => {
+            this.copyFrom = null;
+        }}
+    >
+      <h2>
+        Copy
+        ${dayNames[weekdays.indexOf(this.copyFrom)]}
+        to…
+      </h2>
+      <p class="muted">Replace the selected days. Save the profile to apply.</p>
+      <form
+        @submit=${(e) => {
+            e.preventDefault();
+            if (!this.writable || this.saving)
+                return;
+            const data = new FormData(e.target);
+            this.draft = copyDay(this.draft, this.copyFrom, data.getAll("days").map(String));
+            this.renderRoot
+                .querySelector("#copy-day")
+                ?.close();
+        }}
+      >
+        <fieldset ?disabled=${!this.writable || this.saving}>
+          ${weekdays.map((day, i) => b `<label class="check"
+                ><input
+                  type="checkbox"
+                  name="days"
+                  value=${day}
+                  ?disabled=${day === this.copyFrom}
+                />${dayNames[i]}</label
+              >`)}
+        </fieldset>
+        <div class="actions">
+          <button
+            type="button"
+            @click=${() => this.renderRoot
+            .querySelector("#copy-day")
+            ?.close()}
+          >
+            Cancel</button
+          ><button
+            class="primary"
+            ?disabled=${!this.writable || this.saving}
+            type="submit"
+          >
+            Copy selected days
+          </button>
+        </div>
+      </form>
+    </dialog>`;
+    }
+}
+if (!customElements.get("heating-schedules"))
+    customElements.define("heating-schedules", HeatingSchedules);
+
 const tabs = ["Overview", "Rooms", "Schedules", "Settings"];
 const flame = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3c1 5-4 5-2 9 1-1 2-2 3-3 3 3 5 5 4 8a6 6 0 0 1-12-1c0-4 3-6 4-8 0 3 1 3 2 4"/></svg>`;
 const shield = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg>`;
@@ -879,7 +1798,6 @@ class CentralHeatingCard extends i {
             const unsub = await client.subscribe((value) => {
                 if (generation === this.generation) {
                     if ("unloaded" in value) {
-                        this.unsubscribe = undefined;
                         this.retryConnection();
                         return;
                     }
@@ -997,7 +1915,12 @@ class CentralHeatingCard extends i {
               ${tab}
             </button>`)}
       </nav>
-      <main id="view" role="tabpanel" aria-labelledby=${`tab-${this.tab}`}>
+      <main
+        id="view"
+        role="tabpanel"
+        class=${this.reconnecting ? "stale" : ""}
+        aria-labelledby=${`tab-${this.tab}`}
+      >
         ${s
             ? this.tab === "Overview"
                 ? this.overview(s)
@@ -1005,18 +1928,21 @@ class CentralHeatingCard extends i {
                     ? this.rooms(s)
                     : this.tab === "Settings"
                         ? this.settings(s)
-                        : this.schedules(s)
+                        : A
             : b `<p class="muted">
               ${this.error
                 ? "Heating information is unavailable."
                 : "Connecting to Central Heating…"}
             </p>`}
+        <div ?hidden=${this.tab !== "Schedules"}>
+          ${s ? this.schedules(s) : A}
+        </div>
       </main>
       ${this.error
             ? b `<div class="notice error" role="alert">${this.error}</div>`
             : A}${this.notice
             ? b `<div class="notice" role="status">${this.notice}</div>`
-            : A}${!this.writable && s
+            : A}${!this.writable && !this.reconnecting && s
             ? b `<div class="notice muted">
             Read-only access. An administrator can change heating settings.
           </div>`
@@ -1116,12 +2042,12 @@ class CentralHeatingCard extends i {
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${room.override_until
-            ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
-            : room.demanding
-                ? "Calling for heat"
-                : s.configuration.mode.value === "manual"
-                    ? "Thermostat controlled"
+                  >${s.configuration.mode.value !== "auto"
+            ? `${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)} · ${temperature(room.desired ?? room.target)}`
+            : room.override_until
+                ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+                : room.demanding
+                    ? "Calling for heat"
                     : "Comfort on schedule"}</small
                 >
                 <div class="room-tags">
@@ -1516,35 +2442,20 @@ class CentralHeatingCard extends i {
     </form>`;
     }
     schedules(s) {
-        return b `<div class="toolbar">
-        <div>
-          <h2>Weekly profiles</h2>
-          <p class="muted">A clear plan for every room.</p>
-        </div>
-        <span class="badge">Preview</span>
-      </div>
-      <div class="panel">
-        <p>
-          The week-grid editor is coming in the next update. Your existing
-          profiles keep running.
-        </p>
-        ${Object.entries(s.configuration.profiles).map(([id, profile]) => b `<div class="profile-row">
-              <div>
-                <h3>${profile.name}</h3>
-                <small
-                  >${Object.values(s.configuration.rooms)
-            .filter((room) => room.profile_id === id)
-            .map((room) => room.name)
-            .join(", ") || "No rooms assigned"}</small
-                >
-              </div>
-              <span class="badge">Weekly schedule</span>
-            </div>`)}${!Object.keys(s.configuration.profiles).length
-            ? b `<p class="muted">
-              No profiles yet. Add a room to create a simple default profile.
-            </p>`
-            : A}
-      </div>`;
+        return b `<heating-schedules
+      .status=${s}
+      .hass=${this.hass}
+      .writable=${this.writable}
+      .saveProfile=${async (profile) => {
+            if (!(await this.write("profile/save", { profile }, "Profile saved.")))
+                throw new Error(this.error || "Unable to save while reconnecting.");
+            return this.status?.saved_id;
+        }}
+      .deleteProfile=${async (id) => {
+            if (!(await this.write("profile/delete", { profile_id: id }, "Profile deleted.")))
+                throw new Error(this.error || "Unable to delete while reconnecting.");
+        }}
+    ></heating-schedules>`;
     }
     settings(s) {
         const settings = s.configuration.settings;

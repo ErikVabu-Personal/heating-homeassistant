@@ -58,3 +58,12 @@ requires confirmation inside the card that Central Heating will start sending co
 Saving temperature/retry settings never changes shadow. Display times follow HA's locale and time-format preference;
 away date-picker payloads remain local wall-clock time in HA's configured server zone. The bundle URL includes its
 content hash so a changed build cannot keep the old cache key. Missing assigned TRVs remain visible in the room editor.
+
+### Thermostat schedules and staged handover
+
+Switch off the TRVs' own internal schedules before Central Heating drives room targets in auto mode.
+Disable any previous room scheduler at the same time, so two schedulers do not fight each other.
+For a staged handover, start boiler control in manual mode while TRVs keep their previous schedules;
+then configure profiles, disable those schedules and switch to auto. Shadow mode is the safe install
+default and pauses boiler commands with one click; manual mode pauses room schedule writes too.
+Comparing with a previous setup is optional.

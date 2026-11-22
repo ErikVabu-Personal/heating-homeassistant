@@ -1,11 +1,13 @@
 """Validated immutable snapshots, serialized updates and HA-managed persistence."""
 
 import asyncio
+import json
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from math import isfinite
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .const import DOMAIN
@@ -214,6 +216,22 @@ class HeatingStore:
         self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=2)
         self._lock = asyncio.Lock()
         self.data = HeatingData()
+
+    @staticmethod
+    async def async_read_only(hass: HomeAssistant, entry_id: str) -> HeatingData:
+        """Read ownership without Store migration, caching, or delayed disk writes."""
+
+        def read():
+            path = Path(hass.config.path(".storage", f"{DOMAIN}.{entry_id}"))
+            try:
+                envelope = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return HeatingData()
+            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > 2:
+                raise ValueError("Unsupported heating Store version")
+            return from_json(envelope["data"])
+
+        return await hass.async_add_executor_job(read)
 
     async def async_remove(self) -> None:
         await self._store.async_remove()

@@ -859,3 +859,29 @@ async def test_partial_confirmation_updates_observed_for_next_retry(hass, freeze
     assert sleepy.sent[-1].data["temperature"] == 23
     assert engine.store.data.overrides[0].target == 23
     await engine.async_stop(unloading=False)
+
+
+async def test_s09_new_setpoint_while_off_cannot_confirm_pending_heat(hass, freezer):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    report(hass, "climate.trv_a", 18, mode="off")
+    await hass.async_block_till_done()
+    sleepy = SleepyTRV(hass, "climate.trv_a")
+    await engine.async_data_changed()
+    await hass.async_block_till_done()
+    pending = engine.rooms.pending["climate.trv_a"]
+    assert pending.commands[-1].target == 21
+    # Temperature changed to the requested target, but the physical device is still off.
+    report(hass, "climate.trv_a", 21, mode="off")
+    await hass.async_block_till_done()
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    assert pending.cancel is not None
+    await advance(hass, freezer, 10)
+    assert pending.retries == 1
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    await sleepy.wake()
+    assert "climate.trv_a" not in engine.rooms.pending
+    assert hass.states.get("climate.trv_a").state == "heat"
+    await engine.async_stop(unloading=False)

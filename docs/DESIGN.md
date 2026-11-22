@@ -341,12 +341,22 @@ Every command validates with voluptuous, returns structured errors, and never pa
 
 Subscriptions retain cleanup callbacks in a set on the entry engine. One entry-unload hook drains this set;
 normal unsubscribe/disconnect removes its own callback. Unload/reload sends a final `{"unloaded": true}` event
-before ending the subscription. The card reconnects with bounded backoff. Normal events are emitted only for
+before ending the subscription. The server keeps only an inert no-op record for the old subscription
+ID until client unsubscribe or socket close; the card calls unsubscribe before resubscribing. This record
+holds no engine listener/timer/reference. A reload test sends the real HA websocket `unsubscribe_events`
+command after the terminal event, verifies success, then subscribes afresh. Frontend lifecycle tests verify
+that the old unsubscribe is called before the replacement subscription, including a terminal event arriving
+before subscribeMessage resolves. Socket reconnect is also safe: the connection's old subscriptions are
+explicitly released, and generation checks reject late callbacks/results from them; temporary late server
+subscriptions are unsubscribed as soon as their setup resolves. These are protocol/lifecycle tests, not a
+claim that the JavaScript HA websocket library itself is run in the test harness. The card reconnects with bounded backoff. Normal events are emitted only for
 a changed snapshot and at most once per second; repeated engine notifications with identical status are silent.
 
 Room deletion removes the room climate's entity-registry entry and any room override. Room saves reject virtual
 Central Heating climates (including renamed entities) and TRVs assigned to any other configured instance,
 including an unloaded instance's stored rooms. A shared ownership lock serializes cross-entry assignment.
+Other-entry lookups read raw storage envelopes without Store migration or writes. Unreadable stores are
+skipped with a warning for status and ordinary control; room/save fails closed with a clear ownership error.
 The full status includes `used_trv_ids` for other instances, for the card's physical-TRV picker.
 
 **Wire contract (part 1):** every instance-specific command carries `config_entry_id`. `get` without it lists
@@ -408,7 +418,15 @@ unloading the entry removes the engine listener and any pending timer. Commands 
    - tap a block to change its temperature, drag a boundary to move it, tap empty space to split, and remove a
      block (it merges with the one before);
    - "copy day to …" with weekday checkboxes, and "copy profile";
-   - shows which rooms use the profile.
+   - shows which rooms use the profile and their next effective change;
+   - explicit Save profile with an unsaved state and inline validation; selection/new/copy is disabled until
+     changes are saved or discarded. Server updates and tab changes do not replace a local draft;
+   - first starts stay at 00:00; boundaries snap to five minutes. Keyboard arrows adjust block targets
+     by 0.5°; boundary arrows move five minutes. A timeline strip splits at the tapped time;
+   - a labelled per-day time/temperature list is available everywhere and replaces the grid at phone width;
+   - copy day replaces checked weekdays in the draft. Copy profile creates a new unsaved identity.
+     Delete lists room references and refuses while used. Every save validates the schedule contract locally
+     and again on the server; shared valid/invalid fixtures run in TypeScript and through the real API.
 3. **Rooms:** add or edit a room: its name, its TRVs (an entity picker limited to `climate` entities that no other
    room uses), its profile, an optional area, and whether it's enabled. TRVs used by other instances are excluded; missing assigned TRVs remain visible and selected until explicitly removed.
 4. **Settings:** frost temperature, hysteresis, away temperature, the default override length, room sync on knob
@@ -478,20 +496,20 @@ committed bundle is up to date.
 
 ## 12. Migration
 
-The house-specific plan (entity IDs, rooms, profiles) is not kept in this public repo.
+Shadow mode is the safe install default and a one-click rollback for boiler output. Installation
+also starts in manual mode, leaving TRVs under their existing control. Room names, device identities
+and local migration plans belong in the user's own configuration, never in this repository.
 
-1. **Install** through HACS and add the integration. It starts in **shadow mode** and **manual** mode, so nothing
-   changes.
-2. **Set up** rooms and profiles in the card that reproduce the current schedules.
-3. **Compare** for a few days:
-   - demand count and setpoint must be identical, apart from the rounding fix;
-   - the virtual temperature must be within ±0.1 °C;
-   - the boiler call must match.
-4. **Cut over:**
-   - turn off the old automations and schedules;
-   - set the mode to `auto`, check the TRV writes, then turn shadow mode off.
-   - **Going back** means turning shadow mode on and turning the old automations and schedules on again.
-5. **Clean up:** remove the old package, Scheduler and its card, and the leftover entities.
+A staged go-live is recommended:
+1. Start boiler control in **manual** mode, with TRVs still driven by their existing schedules.
+   Turn shadow off through the card's explicit confirmation when ready to hand over boiler commands.
+   Disable the previous boiler controller so only one controller sends commands.
+2. Create and check weekly profiles, assign rooms, then disable the old room schedules (including TRVs'
+   own internal schedules) and select **auto**. Only one scheduler should drive each TRV.
+3. If needed, turn shadow on to pause boiler commands immediately. Manual mode also pauses room schedule
+   writes; shadow alone does not. Restore the previous controls deliberately before relying on them.
+
+Comparing demand, setpoints and boiler behaviour with a previous setup before handover is optional.
 
 ## 13. Build plan (pull requests)
 

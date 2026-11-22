@@ -520,3 +520,72 @@ it.each([
     expect(text).toContain(`override until ${locale.expected}`);
   },
 );
+
+it("clears a previous away until in the mode/set payload when returning to auto (C06)", async () => {
+  const fake = mocked();
+  const card = await mount(fake.hass);
+  const mode = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
+  card.shadowRoot!.querySelector<HTMLInputElement>("#until")!.value =
+    "2026-11-23T18:00";
+  mode.value = "auto";
+  submit(mode.form!);
+  await settle(card);
+  expect(writeMessages(fake, "mode/set").at(-1)).toMatchObject({
+    mode: "auto",
+    until: null,
+  });
+});
+it.each(["away", "summer", "manual"] as const)(
+  "room status describes %s instead of schedule comfort",
+  async (mode) => {
+    const card = await mount(mocked().hass);
+    card.status!.configuration.mode.value = mode;
+    card.requestUpdate();
+    await settle(card);
+    expect(card.shadowRoot!.textContent).not.toContain("Comfort on schedule");
+    expect(card.shadowRoot!.textContent).toContain(
+      `${mode[0].toUpperCase() + mode.slice(1)} ·`,
+    );
+  },
+);
+it("unsubscribes on terminal unload before creating the replacement and marks readings stale", async () => {
+  vi.useFakeTimers();
+  const fake = mocked();
+  const card = await mount(fake.hass);
+  fake.emit({ unloaded: true });
+  await settle(card);
+  expect(fake.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(
+    card.shadowRoot!.querySelector("main")!.classList.contains("stale"),
+  ).toBe(true);
+  await vi.advanceTimersByTimeAsync(1000);
+  await settle(card);
+  expect(fake.subscribeMessage).toHaveBeenCalledTimes(2);
+  expect(card.reconnecting).toBe(false);
+  expect(
+    card.shadowRoot!.querySelector("main")!.classList.contains("stale"),
+  ).toBe(false);
+});
+
+it("preserves unsaved schedule drafts across tab changes", async () => {
+  const card = await mount(mocked().hass);
+  card.tab = "Schedules";
+  await settle(card);
+  const editor =
+    card.shadowRoot!.querySelector<import("./schedules").HeatingSchedules>(
+      "heating-schedules",
+    )!;
+  await editor.updateComplete;
+  const name =
+    editor.shadowRoot!.querySelector<HTMLInputElement>("#profile-name")!;
+  name.value = "Unsaved profile";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
+  await editor.updateComplete;
+  card.tab = "Overview";
+  await settle(card);
+  card.tab = "Schedules";
+  await settle(card);
+  expect(card.shadowRoot!.querySelector("heating-schedules")).toBe(editor);
+  expect(editor.draft!.name).toBe("Unsaved profile");
+  expect(editor.dirty).toBe(true);
+});
