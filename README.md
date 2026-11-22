@@ -101,7 +101,7 @@ service choose a plan by name or id.
 The mode select now offers `schedule`/`away`/`off`/`manual`. Update automations using
 `select.select_option`: `auto` and `summer` no longer work as select options. The services and API
 still accept those aliases. Room climate attributes now expose `schedule` instead of `profile`.
-Schedule names cannot equal another schedule's id, preventing ambiguous service/API lookups.
+Service lookups try exact schedule names before ids; selectors and schedule-id commands use ids directly.
 
 Before replacing a legacy Store, migration atomically saves its original bytes (including unused profiles
 and profile names) to `.storage/central_heating.<entry_id>.pre_schedules`. Unused profiles are listed by
@@ -113,3 +113,6 @@ To roll back, stop Home Assistant, install the previous integration version, and
 Restore every affected entry's file; changes made after migration will be lost on rollback. Alternatively,
 restore a complete pre-upgrade Home Assistant backup. Installing an older version alone cannot read the
 new schedule Store.
+
+Before upgrading again after a rollback, move each old `.pre_schedules` file aside to a safe location
+so the next migration can back up the current legacy Store. Keep that earlier backup as well.

@@ -106,7 +106,7 @@
         },
         "mode": {
           "name": "Mode",
-          "description": "Choose auto, away, summer or manual."
+          "description": "Choose schedule, away, off or manual (auto and summer remain service/API aliases)."
         },
         "until": {
           "name": "Until",
@@ -165,7 +165,8 @@
       "description": "Activate a whole-house weekly schedule.",
       "fields": {
         "config_entry_id": {
-          "name": "Heating instance"
+          "name": "Heating instance",
+          "description": "The Central Heating configuration entry to control."
         },
         "schedule": {
           "name": "Schedule",

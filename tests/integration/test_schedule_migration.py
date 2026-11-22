@@ -101,7 +101,16 @@ async def test_unused_profile_warning_and_original_bytes_backup(
     assert (
         await hass.async_add_executor_job(Path(str(path) + ".pre_schedules").read_bytes) == original
     )
-    assert "Unused holiday plan (unused_generic)" in caplog.text
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "Unused profiles omitted" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "Unused holiday plan (unused_generic)" in warnings[0]
+    used = {room["profile_id"] for room in raw["rooms"].values()}
+    for key in used:
+        assert f"{raw['profiles'][key]['name']} ({key})" not in warnings[0]
     assert store._store._atomic_writes
     # Loading again cannot replace the original backup with the new model.
     await HeatingStore(hass, "generic_entry").async_load()

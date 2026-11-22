@@ -696,3 +696,155 @@ it("visibly disables deleting the last schedule with a reason", async () => {
     "last schedule",
   );
 });
+
+it.each([false, true])(
+  "recovers when the open schedule is deleted elsewhere, dirty=%s",
+  async (dirty) => {
+    const e = await mount();
+    const select = e.shadowRoot!.querySelector<HTMLSelectElement>(
+      "[aria-label=Schedule]",
+    )!;
+    select.value = "autumn";
+    select.dispatchEvent(new Event("change"));
+    await tick(e);
+    if (dirty) {
+      input(e, "#target-mon-0", "23");
+      await tick(e);
+    }
+    const status = structuredClone(e.status!);
+    delete status.configuration.schedules.autumn;
+    e.status = status;
+    await tick(e);
+    if (dirty) {
+      expect(e.draft!.rooms.room_a.days.mon[0].target).toBe(23);
+      expect(e.shadowRoot!.textContent).toContain("deleted on another device");
+      expect(button(e, "Save schedule").disabled).toBe(true);
+      button(e, "Discard changes").click();
+      await tick(e);
+    }
+    expect(e.selected).toBe("winter");
+    expect(e.draft!.name).toBe("Winter");
+    expect(e.dirty).toBe(false);
+    expect(button(e, "Create").disabled).toBe(false);
+  },
+);
+it("refreshes remote rename and untouched room while retaining local room edits (N09/N06)", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  const status = structuredClone(e.status!);
+  status.configuration.schedules.winter.name = "Cold";
+  status.configuration.schedules.winter.rooms.room_b.days.mon[0].target = 25;
+  e.status = status;
+  await tick(e);
+  expect(e.draft!.name).toBe("Cold");
+  expect(
+    e.shadowRoot!.querySelector<HTMLInputElement>("#schedule-name")!.value,
+  ).toBe("Cold");
+  expect(e.week.days.mon[0].target).toBe(23);
+  button(e, "Room B").click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector<HTMLInputElement>("#target-mon-0")!.value,
+  ).toBe("25");
+  expect(e.dirty).toBe(true);
+});
+it("moves selected room when it is deleted, preserving other edits (N12)", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  button(e, "Room B").click();
+  await tick(e);
+  input(e, "#start-mon-1", "invalid");
+  await tick(e);
+  const status = structuredClone(e.status!);
+  delete status.configuration.rooms.room_b;
+  for (const s of Object.values(status.configuration.schedules))
+    delete s.rooms.room_b;
+  e.status = status;
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_a");
+  expect(e.week.days.mon[0].target).toBe(23);
+  expect(e.error).toBe("");
+  button(e, "Save schedule").click();
+  await tick(e);
+  expect(e.saveSchedule).toHaveBeenCalledWith(
+    expect.objectContaining({ rooms: { room_a: expect.anything() } }),
+  );
+});
+it("shows server updates received during an in-flight save afterwards (N14)", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  let finish!: (id: string) => void;
+  e.saveSchedule = vi.fn(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  button(e, "Save schedule").click();
+  await tick(e);
+  const status = structuredClone(e.status!);
+  status.configuration.schedules.winter.name = "Cold";
+  status.configuration.schedules.winter.rooms.room_a.days.mon[0].target = 23;
+  status.configuration.schedules.winter.rooms.room_b.days.mon[0].target = 25;
+  e.status = status;
+  await tick(e);
+  expect(e.saving).toBe(true);
+  finish("winter");
+  await tick(e);
+  expect(e.draft).toEqual(status.configuration.schedules.winter);
+  expect(e.dirty).toBe(false);
+  button(e, "Room B").click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector<HTMLInputElement>("#target-mon-0")!.value,
+  ).toBe("25");
+});
+it.each(["winter", ""])(
+  "reconciles room membership in a new draft seeded from %s",
+  async (source) => {
+    const e = await mount();
+    button(e, "Create").click();
+    await tick(e);
+    const name =
+      e.shadowRoot!.querySelector<HTMLInputElement>("#new-schedule-name")!;
+    name.value = "New plan";
+    e.shadowRoot!.querySelector<HTMLSelectElement>("#schedule-source")!.value =
+      source;
+    name.form!.dispatchEvent(new Event("submit", { cancelable: true }));
+    await tick(e);
+    input(e, "#target-mon-0", "23");
+    await tick(e);
+    const status = structuredClone(e.status!);
+    delete status.configuration.rooms.room_b;
+    status.configuration.rooms.room_c = {
+      ...status.configuration.rooms.room_a,
+      name: "Room C",
+      trvs: ["climate.trv_c"],
+    };
+    for (const s of Object.values(status.configuration.schedules)) {
+      delete s.rooms.room_b;
+      s.rooms.room_c = structuredClone(s.rooms.room_a);
+    }
+    e.status = status;
+    await tick(e);
+    expect(e.draft!.rooms).not.toHaveProperty("room_b");
+    expect(e.draft!.rooms.room_a.days.mon[0].target).toBe(23);
+    expect(e.draft!.rooms.room_c.days.mon).toEqual(
+      source
+        ? status.configuration.schedules.winter.rooms.room_c.days.mon
+        : [{ start: "00:00", target: 18 }],
+    );
+    expect(e.dirty).toBe(true);
+    button(e, "Save schedule").click();
+    await tick(e);
+    expect(e.saveSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "New plan",
+        rooms: { room_a: expect.anything(), room_c: expect.anything() },
+      }),
+    );
+  },
+);

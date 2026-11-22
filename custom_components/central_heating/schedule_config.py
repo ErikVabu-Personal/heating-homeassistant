@@ -6,9 +6,9 @@ from .storage import active_schedule, default_days, from_json, to_json
 
 
 def resolve_schedule(data, name_or_id):
-    matches = [item for item in data.schedules if item.id == name_or_id]
+    matches = [item for item in data.schedules if item.name == name_or_id]
     if not matches:
-        matches = [item for item in data.schedules if item.name == name_or_id]
+        matches = [item for item in data.schedules if item.id == name_or_id]
     if not matches:
         raise ValueError("Unknown schedule")
     return matches[0].id
@@ -54,7 +54,9 @@ def edit(data, command, msg):
         baseline["rooms"].update(value.get("rooms", {}))
         raw["schedules"][saved_id] = baseline
     elif command == "schedule/activate":
-        raw["active_schedule_id"] = resolve_schedule(data, msg["schedule_id"])
+        if msg["schedule_id"] not in raw["schedules"]:
+            raise ValueError("Unknown schedule")
+        raw["active_schedule_id"] = msg["schedule_id"]
     elif command == "schedule/delete":
         key = msg["schedule_id"]
         if key not in raw["schedules"]:

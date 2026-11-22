@@ -275,6 +275,7 @@ export class HeatingSchedules extends LitElement {
   activateSchedule?: (id: string) => Promise<void>;
   private baseline = "";
   private serverSnapshot = "";
+  private newSource = "";
   private entryId = "";
   private timeInputs = new Map<string, string>();
   protected willUpdate() {
@@ -294,8 +295,23 @@ export class HeatingSchedules extends LitElement {
     }
     if (!this.draft && this.status)
       this.load(this.status.configuration.active_schedule_id);
-    if (this.draft && this.selected && !this.saving) {
-      const source = this.status?.configuration.schedules[this.selected];
+    if (this.draft && this.status && !this.saving) {
+      const config = this.status.configuration;
+      if (this.selected && !config.schedules[this.selected]) {
+        if (!this.dirty) this.load(config.active_schedule_id);
+        return;
+      }
+      const source = this.selected
+        ? config.schedules[this.selected]
+        : {
+            name: (JSON.parse(this.baseline) as Schedule).name,
+            rooms: Object.fromEntries(
+              Object.keys(config.rooms).map((id) => [
+                id,
+                config.schedules[this.newSource]?.rooms[id] ?? defaultWeek(),
+              ]),
+            ),
+          };
       if (source && JSON.stringify(source) !== this.serverSnapshot) {
         if (!this.dirty) this.load(this.selected);
         else {
@@ -338,7 +354,9 @@ export class HeatingSchedules extends LitElement {
   get dirty() {
     return (
       !!this.draft &&
-      (this.timeInputs.size > 0 || JSON.stringify(this.draft) !== this.baseline)
+      (!this.selected ||
+        this.timeInputs.size > 0 ||
+        JSON.stringify(this.draft) !== this.baseline)
     );
   }
   private load(id: string) {
@@ -517,6 +535,7 @@ export class HeatingSchedules extends LitElement {
         : active
           ? "The active schedule cannot be deleted. Activate another schedule first."
           : "";
+    const missing = !!this.selected && !schedules[this.selected];
     const next = this.status?.rooms[this.selectedRoom]?.next_change;
     return html`<div class="toolbar">
         <div>
@@ -538,6 +557,11 @@ export class HeatingSchedules extends LitElement {
           @change=${(e: Event) =>
             this.load((e.target as HTMLSelectElement).value)}
         >
+          ${missing
+            ? html`<option value=${this.selected} selected>
+                Deleted · ${p?.name}
+              </option>`
+            : nothing}
           ${!this.selected
             ? html`<option value="">New schedule</option>`
             : nothing}
@@ -585,6 +609,12 @@ export class HeatingSchedules extends LitElement {
       </div>
       ${deleteReason
         ? html`<p id="delete-reason" class="muted">${deleteReason}</p>`
+        : nothing}
+      ${missing
+        ? html`<p role="status">
+            This schedule was deleted on another device. Discard changes to open
+            the active schedule.
+          </p>`
         : nothing}
       ${p
         ? html`<fieldset>
@@ -892,15 +922,16 @@ export class HeatingSchedules extends LitElement {
                 ?disabled=${this.saving || !this.dirty}
                 @click=${() =>
                   this.load(
-                    this.selected ||
-                      this.status!.configuration.active_schedule_id,
+                    (this.status!.configuration.schedules[this.selected]
+                      ? this.selected
+                      : "") || this.status!.configuration.active_schedule_id,
                   )}
               >
                 Discard changes</button
               ><button
                 id="save-schedule"
                 class="primary"
-                ?disabled=${disabled || !this.dirty}
+                ?disabled=${disabled || !this.dirty || missing}
                 @click=${() => this.save()}
               >
                 ${this.saving ? "Saving…" : "Save schedule"}
@@ -1137,7 +1168,9 @@ export class HeatingSchedules extends LitElement {
                   ]),
                 ),
           };
-          this.baseline = "";
+          this.newSource = source;
+          this.baseline = JSON.stringify(this.draft);
+          this.serverSnapshot = "";
           this.error = "";
           this.renderRoot
             .querySelector<HTMLDialogElement>("#create-schedule")

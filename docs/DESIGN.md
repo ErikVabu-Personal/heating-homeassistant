@@ -462,8 +462,9 @@ Unused profiles are warned by name and id. The new Store also enables `atomic_wr
 Rollback: stop HA, install the previous integration version and restore each entry's `.pre_schedules`
 backup over its original Store file before starting HA. Alternatively restore a complete pre-upgrade
 HA backup. Downgrade alone cannot read the new Store; restoring discards post-upgrade changes.
-Schedule names may not equal another schedule's id; the active-schedule select maps exact option names
-to ids, avoiding ambiguous selection.
+Service lookups try exact schedule names before ids. The active-schedule select maps option names
+to ids directly; websocket schedule-id commands also use ids directly. Before upgrading again after
+rollback, move the old `.pre_schedules` file aside so the changed legacy Store can be backed up.
 
 
 Minor version 4 upgrades older version-1 Stores automatically on the next integration load. Existing room IDs,

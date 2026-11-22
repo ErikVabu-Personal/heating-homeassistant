@@ -166,12 +166,6 @@ def validate_data(data: HeatingData) -> None:
             or not schedule.name.strip()
         ):
             raise ValueError("Schedule names must be non-empty")
-        if any(
-            schedule.name.strip().casefold() == other.id.casefold()
-            for other in data.schedules
-            if other.id != schedule.id
-        ):
-            raise ValueError("Schedule name cannot equal another schedule's id")
         names.append(schedule.name.strip().casefold())
         if (
             len(schedule.rooms) != len(room_ids)

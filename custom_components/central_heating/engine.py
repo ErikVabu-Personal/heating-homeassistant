@@ -230,12 +230,15 @@ class HeatingEngine:
                 raise ServiceValidationError(str(exc)) from exc
         await self.async_recalculate(apply_rooms=True)
 
-    async def async_set_schedule(self, name_or_id: str) -> None:
+    async def async_set_schedule(self, name_or_id: str, *, by_id: bool = False) -> None:
         from .schedule_config import resolve_schedule
 
         async with self._lock:
             await self.store.async_update(
-                lambda data: replace(data, active_schedule_id=resolve_schedule(data, name_or_id))
+                lambda data: replace(
+                    data,
+                    active_schedule_id=name_or_id if by_id else resolve_schedule(data, name_or_id),
+                )
             )
         await self.async_data_changed()
 
