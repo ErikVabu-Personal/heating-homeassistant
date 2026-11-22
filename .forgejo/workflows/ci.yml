@@ -37,6 +37,16 @@ jobs:
           subprocess.check_call([sys.executable, "-m", "pip", "install",
                                  "--disable-pip-version-check", *packages])
           PYTHON
+      - name: Frontend typecheck, lint and unit tests
+        run: |
+          npm ci --prefix frontend --no-audit --no-fund
+          npm --prefix frontend run typecheck
+          npm --prefix frontend run lint
+          npm --prefix frontend run test
+      - name: Verify committed card bundle
+        run: |
+          npm --prefix frontend run build
+          git diff --exit-code -- custom_components/central_heating/frontend/central-heating-card.js frontend/demo/demo.js
       - name: Lint
         run: ruff check .
       - name: Format
@@ -79,6 +89,16 @@ jobs:
           PYTHON
       - name: Install HA compatibility target over the supported pair
         run: python -m pip install --disable-pip-version-check homeassistant==2026.11.2
+      - name: Frontend typecheck, lint and unit tests
+        run: |
+          npm ci --prefix frontend --no-audit --no-fund
+          npm --prefix frontend run typecheck
+          npm --prefix frontend run lint
+          npm --prefix frontend run test
+      - name: Verify committed card bundle
+        run: |
+          npm --prefix frontend run build
+          git diff --exit-code -- custom_components/central_heating/frontend/central-heating-card.js frontend/demo/demo.js
       - name: Lint
         run: ruff check .
       - name: Format

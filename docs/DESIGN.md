@@ -380,20 +380,28 @@ unloading the entry removes the engine listener and any pending timer. Commands 
   installs files as they are. CI checks that it matches the source.
 - **Loaded by the integration itself,** so no manual dashboard resource is needed:
   `hass.http.async_register_static_paths([StaticPathConfig(...)])` and
-  `frontend.add_extra_js_url(hass, f"{url}?v={version}")`.
+  `frontend.add_extra_js_url(hass, f"{url}?v={bundle_hash}")`.
 - **Card type:** `custom:central-heating-card`. It's registered in `window.customCards` with a small visual editor
   that picks the config entry, if there's more than one.
+- **Cache key:** the bundle hash is computed from its actual bytes in an executor at setup; a manifest version
+  does not substitute for content identity.
 - **Styling:** Home Assistant theme variables only. It works at phone width and makes no external requests.
+- **Recovery:** an `unloaded` event or disconnected socket shows a reconnecting state and disables writes; the
+  card retries with 1/2/4/8/16/30-second capped backoff, cancels timers/listeners on removal, and re-subscribes on recovery.
+- **Locale:** displayed times follow `hass.locale.language`, `time_format` and time-zone preference. Date-picker
+  values are interpreted in HA's server time zone. See the HA frontend's `format_time.ts`/`use_am_pm.ts` conventions.
+- **Shadow handover:** separate action, never part of Save settings. Turning off requires an in-card confirmation:
+  “Central Heating will start sending commands to the boiler controller”. Turning on applies immediately.
 
 **Tabs:**
 1. **Overview:**
    - the mode selector (with an "until" date and time for away);
    - the boiler status: calling for heat or not, the demand count, the virtual temperature and setpoint, and a
      shadow-mode badge;
-   - a list of rooms with current and target temperature, a flame icon when demanding, and an override badge
+   - a list of rooms with current and target temperature, a flame icon when demanding, status text naming any active override, and an override badge
      ("22° until 18:00").
    - Tapping a room opens a quick override with − and + buttons and a choice of "until the next change", 1 h, 2 h, 3 h or
-     a custom time, plus "back to schedule".
+     a custom time, plus "back to schedule". The initial target is rounded/clamped to the 0.5 grid.
 2. **Schedules:**
    - a list of profiles, and for each profile a week grid with 7 rows of 24 hours, the blocks coloured by
      temperature;
@@ -402,7 +410,7 @@ unloading the entry removes the engine listener and any pending timer. Commands 
    - "copy day to …" with weekday checkboxes, and "copy profile";
    - shows which rooms use the profile.
 3. **Rooms:** add or edit a room: its name, its TRVs (an entity picker limited to `climate` entities that no other
-   room uses), its profile, an optional area, and whether it's enabled.
+   room uses), its profile, an optional area, and whether it's enabled. TRVs used by other instances are excluded; missing assigned TRVs remain visible and selected until explicitly removed.
 4. **Settings:** frost temperature, hysteresis, away temperature, the default override length, room sync on knob
    changes, and shadow mode.
 
@@ -495,8 +503,9 @@ Each pull request includes its tests and passing CI. Each is reviewed independen
    - **2a:** config/options flow, Store, boiler engine/adapter, shadow, mode select and boiler measurements/numbers;
    - **2b:** room climates/control, overrides, retries, services and diagnostics;
    - each part includes its own integration tests and independently passing CI.
-3. **Websocket API and card, part 1:** the API, the bundling and loading, and the Overview, Rooms and Settings
-   tabs.
+3. **Websocket API and card, part 1** (split for independent review):
+   - **3a:** the complete authenticated websocket API, admin writes, profiles and subscriptions;
+   - **3b:** bundling/loading, Overview, Rooms and Settings, a profile-list placeholder and offline demo.
 4. **Card, part 2:** the Schedules tab and its week-grid editor.
 5. **Polish:** translations, README (installation, set-up, migration), Repairs issues, and an end-to-end check
    against a real Home Assistant.

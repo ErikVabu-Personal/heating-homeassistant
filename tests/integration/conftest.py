@@ -9,10 +9,13 @@ def custom_components_enabled(enable_custom_integrations):
 
 
 @pytest.fixture(autouse=True)
-def frontend_setup():
-    # The card is not part of these PRs; retain dependency loading without a UI bundle.
+def frontend_setup(hass):
+    # Keep HA frontend dependencies local; exercise real card registration separately.
     from unittest.mock import AsyncMock, patch
 
+    from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, UrlManager
+
+    hass.data[DATA_EXTRA_MODULE_URL] = UrlManager(lambda *args: None, [])
     with patch("homeassistant.components.frontend.async_setup", new=AsyncMock(return_value=True)):
         yield
 

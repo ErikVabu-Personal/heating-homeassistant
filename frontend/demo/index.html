@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Central Heating · interactive demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --primary-color: #156a78;
+        --text-primary-color: #ffffff;
+        --primary-text-color: #20343a;
+        --secondary-text-color: #5b7076;
+        --divider-color: #dce5e7;
+        --card-background-color: #ffffff;
+        --ha-card-background: #ffffff;
+        --secondary-background-color: #f2f7f7;
+        --warning-color: #a35d0a;
+        --error-color: #b3261e;
+        --state-climate-heat-color: #b45d10;
+        --ha-card-border-radius: 18px;
+        background: #e9eff1;
+        font-family: system-ui, sans-serif;
+        color: var(--primary-text-color);
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --primary-color: #7ac8d2;
+        --text-primary-color: #10282d;
+        --primary-text-color: #e0ebee;
+        --secondary-text-color: #a3b6bd;
+        --divider-color: #34494f;
+        --card-background-color: #1b2e34;
+        --ha-card-background: #1b2e34;
+        --secondary-background-color: #233a41;
+        --warning-color: #f5b96f;
+        --error-color: #ffb4ab;
+        --state-climate-heat-color: #f5b96f;
+        background: #122329;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+      aside {
+        max-width: 1080px;
+        margin: 0 auto 20px;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 13px;
+      }
+      aside strong {
+        font-size: 15px;
+      }
+      aside label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      aside select,
+      aside button {
+        min-height: 40px;
+        padding: 8px;
+        color: var(--primary-text-color);
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        font: inherit;
+      }
+      #preview {
+        max-width: 100%;
+        margin: 0 auto;
+      }
+      aside p {
+        margin: 0;
+        width: 100%;
+        color: var(--secondary-text-color);
+      }
+      @media (max-width: 600px) {
+        body {
+          padding: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <strong>Central Heating / Demo</strong
+      ><label
+        >Theme
+        <select id="theme">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select></label
+      ><label
+        >Preview
+        <select id="width">
+          <option value="1080px">Desktop</option>
+          <option value="390px">Phone · 390px</option>
+        </select></label
+      ><button id="reset">Reset demo</button>
+      <button id="simulate-drop">Simulate connection drop</button>
+      <p>
+        Invented rooms and thermostat data. Changes stay in this page; no Home
+        Assistant or external services are contacted.
+      </p>
+    </aside>
+    <div id="preview"><central-heating-card></central-heating-card></div>
+    <script src="./demo.js"></script>
+  </body>
+</html>
