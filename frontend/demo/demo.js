@@ -162,6 +162,144 @@
         return `${date} ${clock}`;
     }
 
+    const weekdays = [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun",
+    ];
+    const dayNames = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+    function minutes(start) {
+        if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start))
+            throw new Error("Start time must be HH:MM.");
+        const [h, m] = start.split(":").map(Number);
+        return h * 60 + m;
+    }
+    function clock(value) {
+        return `${Math.floor(value / 60)
+        .toString()
+        .padStart(2, "0")}:${(value % 60).toString().padStart(2, "0")}`;
+    }
+    function snap(value) {
+        if (!Number.isFinite(value))
+            throw new Error("Choose a valid time.");
+        return Math.max(0, Math.min(1435, Math.round(value / 5) * 5));
+    }
+    function validateDay(blocks) {
+        if (!blocks.length || blocks[0].start !== "00:00")
+            throw new Error("Each day must start at 00:00.");
+        let previous = -1;
+        for (const block of blocks) {
+            const at = minutes(block.start);
+            if (at % 5)
+                throw new Error("Times must be on the five-minute grid.");
+            if (at <= previous)
+                throw new Error("Block starts must be strictly increasing.");
+            if (!Number.isFinite(block.target) ||
+                block.target < 5 ||
+                block.target > 30 ||
+                !Number.isInteger(block.target * 2))
+                throw new Error("Temperature must be 5–30° in 0.5° steps.");
+            previous = at;
+        }
+    }
+    function weekPayload(week) {
+        if (Object.keys(week.days).length !== 7 ||
+            weekdays.some((day) => !week.days[day]))
+            throw new Error("A week needs all seven days.");
+        for (const day of weekdays)
+            validateDay(week.days[day]);
+        return { days: structuredClone(week.days) };
+    }
+    function schedulePayload(schedule, id) {
+        if (!schedule.name.trim() || schedule.name.length > 200)
+            throw new Error("Enter a schedule name of 1–200 characters.");
+        for (const week of Object.values(schedule.rooms))
+            weekPayload(week);
+        return {
+            ...(id ? { id } : {}),
+            name: schedule.name.trim(),
+            rooms: structuredClone(schedule.rooms),
+        };
+    }
+    function splitBlock(blocks, at) {
+        const start = clock(snap(at));
+        if (blocks.some((b) => b.start === start))
+            throw new Error("A block already starts here.");
+        const previous = [...blocks].reverse().find((b) => b.start < start);
+        if (!previous)
+            throw new Error("The first block stays at 00:00.");
+        return [
+            ...blocks.map((b) => ({ ...b })),
+            { start, target: previous.target },
+        ].sort((a, b) => a.start.localeCompare(b.start));
+    }
+    function removeBlock(blocks, index) {
+        if (index <= 0 || index >= blocks.length)
+            throw new Error("The first block stays at 00:00.");
+        return blocks.filter((_, i) => i !== index).map((b) => ({ ...b }));
+    }
+    function moveBoundary(blocks, index, at) {
+        if (index <= 0 || index >= blocks.length)
+            throw new Error("The first block stays at 00:00.");
+        const min = minutes(blocks[index - 1].start) + 5;
+        const max = index + 1 < blocks.length ? minutes(blocks[index + 1].start) - 5 : 1435;
+        const start = clock(Math.max(min, Math.min(max, snap(at))));
+        return blocks.map((b, i) => (i === index ? { ...b, start } : { ...b }));
+    }
+    function copyDay(week, from, to) {
+        const result = structuredClone(week);
+        for (const day of to) {
+            if (!weekdays.includes(day))
+                throw new Error("Invalid weekday.");
+            result.days[day] = structuredClone(week.days[from]);
+        }
+        return result;
+    }
+    function temperatureStep(value, step) {
+        return Math.max(5, Math.min(30, Math.round(value * 2 + step) / 2));
+    }
+
+    /** Shared 24-hour geometry for read-only schedule bars. */
+    function barLayout(blocks) {
+        validateDay(blocks);
+        return blocks.map((block, index) => {
+            const start = minutes(block.start);
+            const end = index + 1 < blocks.length ? minutes(blocks[index + 1].start) : 1440;
+            return {
+                ...block,
+                end,
+                left: (start / 1440) * 100,
+                width: ((end - start) / 1440) * 100,
+            };
+        });
+    }
+    function houseClock(now, zone = "UTC") {
+        const parts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: zone,
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        }).formatToParts(now);
+        const part = (key) => parts.find((p) => p.type === key).value;
+        return {
+            day: part("weekday").toLowerCase(),
+            minute: Number(part("hour")) * 60 + Number(part("minute")),
+        };
+    }
+
     const styles = i$3 `
   :host {
     display: block;
@@ -667,118 +805,12 @@
   }
 `;
 
-    const weekdays = [
-        "mon",
-        "tue",
-        "wed",
-        "thu",
-        "fri",
-        "sat",
-        "sun",
-    ];
-    const dayNames = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-        "Sunday",
-    ];
-    function minutes(start) {
-        if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start))
-            throw new Error("Start time must be HH:MM.");
-        const [h, m] = start.split(":").map(Number);
-        return h * 60 + m;
-    }
-    function clock(value) {
-        return `${Math.floor(value / 60)
-        .toString()
-        .padStart(2, "0")}:${(value % 60).toString().padStart(2, "0")}`;
-    }
-    function snap(value) {
-        if (!Number.isFinite(value))
-            throw new Error("Choose a valid time.");
-        return Math.max(0, Math.min(1435, Math.round(value / 5) * 5));
-    }
-    function validateDay(blocks) {
-        if (!blocks.length || blocks[0].start !== "00:00")
-            throw new Error("Each day must start at 00:00.");
-        let previous = -1;
-        for (const block of blocks) {
-            const at = minutes(block.start);
-            if (at % 5)
-                throw new Error("Times must be on the five-minute grid.");
-            if (at <= previous)
-                throw new Error("Block starts must be strictly increasing.");
-            if (!Number.isFinite(block.target) ||
-                block.target < 5 ||
-                block.target > 30 ||
-                !Number.isInteger(block.target * 2))
-                throw new Error("Temperature must be 5–30° in 0.5° steps.");
-            previous = at;
-        }
-    }
-    function weekPayload(week) {
-        if (Object.keys(week.days).length !== 7 ||
-            weekdays.some((day) => !week.days[day]))
-            throw new Error("A week needs all seven days.");
-        for (const day of weekdays)
-            validateDay(week.days[day]);
-        return { days: structuredClone(week.days) };
-    }
-    function schedulePayload(schedule, id) {
-        if (!schedule.name.trim() || schedule.name.length > 200)
-            throw new Error("Enter a schedule name of 1–200 characters.");
-        for (const week of Object.values(schedule.rooms))
-            weekPayload(week);
-        return {
-            ...(id ? { id } : {}),
-            name: schedule.name.trim(),
-            rooms: structuredClone(schedule.rooms),
-        };
-    }
-    function splitBlock(blocks, at) {
-        const start = clock(snap(at));
-        if (blocks.some((b) => b.start === start))
-            throw new Error("A block already starts here.");
-        const previous = [...blocks].reverse().find((b) => b.start < start);
-        if (!previous)
-            throw new Error("The first block stays at 00:00.");
-        return [
-            ...blocks.map((b) => ({ ...b })),
-            { start, target: previous.target },
-        ].sort((a, b) => a.start.localeCompare(b.start));
-    }
-    function removeBlock(blocks, index) {
-        if (index <= 0 || index >= blocks.length)
-            throw new Error("The first block stays at 00:00.");
-        return blocks.filter((_, i) => i !== index).map((b) => ({ ...b }));
-    }
-    function moveBoundary(blocks, index, at) {
-        if (index <= 0 || index >= blocks.length)
-            throw new Error("The first block stays at 00:00.");
-        const min = minutes(blocks[index - 1].start) + 5;
-        const max = index + 1 < blocks.length ? minutes(blocks[index + 1].start) - 5 : 1435;
-        const start = clock(Math.max(min, Math.min(max, snap(at))));
-        return blocks.map((b, i) => (i === index ? { ...b, start } : { ...b }));
-    }
-    function copyDay(week, from, to) {
-        const result = structuredClone(week);
-        for (const day of to) {
-            if (!weekdays.includes(day))
-                throw new Error("Invalid weekday.");
-            result.days[day] = structuredClone(week.days[from]);
-        }
-        return result;
-    }
-    function temperatureStep(value, step) {
-        return Math.max(5, Math.min(30, Math.round(value * 2 + step) / 2));
-    }
-
     class HeatingSchedules extends i {
         constructor() {
             super(...arguments);
+            this.view = "rooms";
+            this.overviewDay = "";
+            this.openedDay = "";
             this.writable = false;
             this.selected = "";
             this.selectedRoom = "";
@@ -796,6 +828,9 @@
             this.timeInputs = new Map();
         }
         static { this.properties = {
+            view: { state: true },
+            overviewDay: { state: true },
+            openedDay: { state: true },
             status: { attribute: false },
             hass: { attribute: false },
             writable: { type: Boolean },
@@ -1006,6 +1041,111 @@
           grid-template-columns: 1fr 1fr;
         }
       }
+      .phone-week {
+        display: none;
+      }
+      .bar-row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .bar-name {
+        overflow-wrap: anywhere;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .bar-button {
+        width: 100%;
+        min-width: 0;
+        height: 44px;
+        padding: 0;
+        position: relative;
+        overflow: hidden;
+        border-radius: 6px;
+        background: var(--card-background-color);
+      }
+      .bar-segment {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        white-space: nowrap;
+        font-size: 12px;
+        border-right: 1px solid var(--divider-color);
+      }
+      .bar-segment > span {
+        position: relative;
+        z-index: 2;
+        background: inherit;
+        padding: 0 2px;
+      }
+      .bar-axis {
+        margin-left: 132px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--secondary-text-color);
+      }
+      .now-marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: var(--primary-text-color);
+        z-index: 1;
+        pointer-events: none;
+      }
+      .day-overview {
+        margin-top: 16px;
+      }
+      .overview-rows {
+        max-height: 640px;
+        overflow-y: auto;
+        padding: 4px;
+      }
+      .view-toggle {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .view-toggle [aria-pressed="true"] {
+        border-color: var(--primary-color);
+        font-weight: 700;
+      }
+      @container (max-width:600px) {
+        .phone-week {
+          display: block;
+        }
+        .phone-week .bar-row {
+          grid-template-columns: 38px minmax(0, 1fr);
+          gap: 8px;
+        }
+        .phone-week .bar-axis {
+          margin-left: 46px;
+        }
+        .day-overview .bar-row {
+          grid-template-columns: 72px minmax(0, 1fr);
+          gap: 8px;
+          margin: 8px 0;
+        }
+        .day-overview .bar-axis {
+          margin-left: 80px;
+        }
+        .overview-rows {
+          max-height: 620px;
+        }
+        .day-list details {
+          display: none;
+        }
+        .day-list details[open] {
+          display: block;
+        }
+      }
       .toolbar {
         flex-wrap: wrap;
       }
@@ -1028,12 +1168,23 @@
       }
     `,
         ]; }
+        connectedCallback() {
+            super.connectedCallback();
+            this.clockTimer = setInterval(() => this.requestUpdate(), 60_000);
+        }
+        disconnectedCallback() {
+            super.disconnectedCallback();
+            clearInterval(this.clockTimer);
+        }
         willUpdate() {
             if (this.entryId !== this.status?.config_entry_id) {
                 this.entryId = this.status?.config_entry_id ?? "";
                 this.draft = undefined;
                 this.selected = "";
                 this.selectedRoom = "";
+                this.view = "rooms";
+                this.overviewDay = "";
+                this.openedDay = "";
                 this.block = null;
                 this.error = "";
                 this.copyFrom = null;
@@ -1371,7 +1522,26 @@
             }}
                 />
               </div>
-              <div class="schedule-layout">
+              <div class="view-toggle" aria-label="Schedule view">
+                <button
+                  aria-pressed=${this.view === "rooms"}
+                  @click=${() => {
+                this.view = "rooms";
+            }}
+                >
+                  Rooms
+                </button>
+                <button
+                  aria-pressed=${this.view === "overview"}
+                  @click=${() => {
+                this.view = "overview";
+            }}
+                >
+                  Overview
+                </button>
+              </div>
+              ${this.overview()}
+              <div class="schedule-layout" ?hidden=${this.view !== "rooms"}>
                 <div class="room-picker" aria-label="Rooms in schedule">
                   ${rooms.map(([id, room]) => b `<button
                         aria-pressed=${this.selectedRoom === id}
@@ -1387,7 +1557,7 @@
                       </button>`)}
                 </div>
                 <div class="week-editor">
-                  <fieldset ?disabled=${disabled}>
+                  <fieldset>
                     ${this.selectedRoom
                 ? b `<div class="toolbar">
                             <div>
@@ -1400,7 +1570,10 @@
                     : "Activate this schedule to use these weeks."}</small
                               >
                             </div>
-                            <button @click=${() => this.showDialog("rooms")}>
+                            <button
+                              ?disabled=${disabled}
+                              @click=${() => this.showDialog("rooms")}
+                            >
                               Copy this room’s week to…
                             </button>
                           </div>
@@ -1413,27 +1586,42 @@
                                   >${temperature(t)}</span
                                 >`)}
                           </div>
-                          <div class="week" aria-label="Weekly schedule grid">
-                            <div class="axis">
-                              <span>00:00</span><span>06:00</span
-                              ><span>12:00</span><span>18:00</span
-                              ><span>24:00</span>
-                            </div>
-                            ${weekdays.map((day, i) => b `<div class="day">
-                                  <span class="day-label">${dayNames[i]}</span>
-                                  <div class="track">
-                                    ${week.days[day].map((b$1, j) => {
+                          <div class="phone-week" aria-label="Weekly day bars">
+                            <p class="muted">
+                              Tap a day to edit its times and temperatures.
+                            </p>
+                            ${this.barAxis()}
+                            ${weekdays.map((day, i) => b `<div class="bar-row">
+                                  <span class="bar-name"
+                                    >${dayNames[i].slice(0, 3)}</span
+                                  >
+                                  ${this.readBar(week.days[day], dayNames[i], () => this.openDay(day), undefined, `day-${day}`)}
+                                </div>`)}
+                          </div>
+                          <fieldset ?disabled=${disabled}>
+                            <div class="week" aria-label="Weekly schedule grid">
+                              <div class="axis">
+                                <span>00:00</span><span>06:00</span
+                                ><span>12:00</span><span>18:00</span
+                                ><span>24:00</span>
+                              </div>
+                              ${weekdays.map((day, i) => b `<div class="day">
+                                    <span class="day-label"
+                                      >${dayNames[i]}</span
+                                    >
+                                    <div class="track">
+                                      ${week.days[day].map((b$1, j) => {
                     const start = minutes(b$1.start), end = j + 1 < week.days[day].length
                         ? minutes(week.days[day][j + 1].start)
                         : 1440;
                     return b ` <button
-                                          class="schedule-block"
-                                          style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b$1.target)}`}
-                                          aria-label=${`${dayNames[i]} ${b$1.start} to ${clock(end)} · ${temperature(b$1.target)}. Arrow keys change temperature.`}
-                                          @click=${() => {
+                                            class="schedule-block"
+                                            style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b$1.target)}`}
+                                            aria-label=${`${dayNames[i]} ${b$1.start} to ${clock(end)} · ${temperature(b$1.target)}. Arrow keys change temperature.`}
+                                            @click=${() => {
                         this.block = { day, index: j };
                     }}
-                                          @keydown=${(e) => {
+                                            @keydown=${(e) => {
                         if ([
                             "ArrowUp",
                             "ArrowDown",
@@ -1454,34 +1642,35 @@
                                 : x));
                         }
                     }}
-                                        >
-                                          ${temperature(b$1.target)}
-                                        </button>
-                                        ${j
+                                          >
+                                            ${temperature(b$1.target)}
+                                          </button>
+                                          ${j
                         ? b `<button
-                                              class="boundary"
-                                              style=${`left:${start / 14.4}%`}
-                                              aria-label=${`Move ${dayNames[i]} boundary at ${b$1.start}`}
-                                              @pointerdown=${(e) => this.drag(e, day, j)}
-                                              @keydown=${(e) => {
+                                                class="boundary"
+                                                style=${`left:${start / 14.4}%`}
+                                                aria-label=${`Move ${dayNames[i]} boundary at ${b$1.start}`}
+                                                @pointerdown=${(e) => this.drag(e, day, j)}
+                                                @keydown=${(e) => {
                             if ([
                                 "ArrowLeft",
                                 "ArrowRight",
                             ].includes(e.key)) {
                                 e.preventDefault();
                                 this.change(day, moveBoundary(week.days[day], j, start +
-                                    (e.key === "ArrowRight"
+                                    (e.key ===
+                                        "ArrowRight"
                                         ? 5
                                         : -5)));
                             }
                         }}
-                                            ></button>`
+                                              ></button>`
                         : A}`;
                 })}
-                                    <button
-                                      class="split-time"
-                                      aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
-                                      @click=${(e) => this.attempt(() => {
+                                      <button
+                                        class="split-time"
+                                        aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
+                                        @click=${(e) => this.attempt(() => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const at = e.detail === 0
                         ? 720
@@ -1490,82 +1679,93 @@
                             1440;
                     this.change(day, splitBlock(week.days[day], at));
                 })}
-                                    >
-                                      + Tap timeline to split
-                                    </button>
-                                  </div>
-                                </div>`)}
-                          </div>
-                          ${this.blockEditor()}
-                          <div class="day-list">
-                            <h3>Edit times & copy days</h3>
-                            <p class="muted">
-                              Five-minute times, half-degree temperatures. Each
-                              day starts at 00:00.
-                            </p>
-                            ${weekdays.map((day, i) => b `<details>
-                                  <summary>
-                                    ${dayNames[i]} · ${week.days[day].length}
-                                    blocks
-                                  </summary>
-                                  ${week.days[day].map((b$1, j) => b `<div class="block-row">
-                                        <div class="field">
-                                          <label for=${`start-${day}-${j}`}
-                                            >Start time</label
-                                          ><input
-                                            id=${`start-${day}-${j}`}
-                                            aria-invalid=${this.timeInputs.has(`${day}-${j}`)}
-                                            type="text"
-                                            inputmode="text"
-                                            .value=${this.timeInputs.get(`${day}-${j}`) ??
+                                      >
+                                        + Tap timeline to split
+                                      </button>
+                                    </div>
+                                  </div>`)}
+                            </div>
+                            ${this.blockEditor()}
+                            <div class="day-list">
+                              <h3>Edit times & copy days</h3>
+                              <p class="muted">
+                                Five-minute times, half-degree temperatures.
+                                Each day starts at 00:00.
+                              </p>
+                              ${weekdays.map((day, i) => b `<details
+                                    id=${`day-${day}`}
+                                    @toggle=${(e) => {
+                    if (e.target.open)
+                        this.openedDay = day;
+                    else if (this.openedDay === day)
+                        this.openedDay = "";
+                }}
+                                  >
+                                    <summary>
+                                      ${dayNames[i]} · ${week.days[day].length}
+                                      blocks
+                                    </summary>
+                                    ${week.days[day].map((b$1, j) => b `<div class="block-row">
+                                          <div class="field">
+                                            <label for=${`start-${day}-${j}`}
+                                              >Start time</label
+                                            ><input
+                                              id=${`start-${day}-${j}`}
+                                              aria-invalid=${this.timeInputs.has(`${day}-${j}`)}
+                                              type="text"
+                                              inputmode="text"
+                                              .value=${this.timeInputs.get(`${day}-${j}`) ??
                     scheduleTime(b$1.start, this.hass?.locale)}
-                                            ?disabled=${!j}
-                                            @change=${(e) => this.editTime(day, j, e)}
-                                          />
-                                        </div>
-                                        <div class="field">
-                                          <label for=${`target-${day}-${j}`}
-                                            >Temperature °C</label
-                                          ><input
-                                            id=${`target-${day}-${j}`}
-                                            type="number"
-                                            min="5"
-                                            max="30"
-                                            step="0.5"
-                                            .value=${String(b$1.target)}
-                                            @change=${(e) => this.change(day, week.days[day].map((x, k) => k === j
+                                              ?disabled=${!j}
+                                              @change=${(e) => this.editTime(day, j, e)}
+                                            />
+                                          </div>
+                                          <div class="field">
+                                            <label for=${`target-${day}-${j}`}
+                                              >Temperature °C</label
+                                            ><input
+                                              id=${`target-${day}-${j}`}
+                                              type="number"
+                                              min="5"
+                                              max="30"
+                                              step="0.5"
+                                              .value=${String(b$1.target)}
+                                              @change=${(e) => this.change(day, week.days[day].map((x, k) => k === j
                     ? {
                         ...x,
                         target: Number(e.target.value),
                     }
                     : x))}
-                                          />
-                                        </div>
-                                        <button
-                                          ?disabled=${!j}
-                                          @click=${() => {
+                                            />
+                                          </div>
+                                          <button
+                                            ?disabled=${!j}
+                                            @click=${() => {
                     this.change(day, removeBlock(week.days[day], j));
                     this.block = null;
                 }}
-                                        >
-                                          Remove<span class="sr-only">
-                                            ${dayNames[i]} ${b$1.start}</span
                                           >
-                                        </button>
-                                      </div>`)}
-                                  <div class="actions">
-                                    <button
-                                      @click=${() => this.attempt(() => {
+                                            Remove<span class="sr-only">
+                                              ${dayNames[i]} ${b$1.start}</span
+                                            >
+                                          </button>
+                                        </div>`)}
+                                    <div class="actions">
+                                      <button
+                                        @click=${() => this.attempt(() => {
                     this.change(day, splitBlock(week.days[day], minutes(week.days[day].at(-1).start) + 5));
                 })}
-                                    >
-                                      Add block</button
-                                    ><button @click=${() => this.showCopy(day)}>
-                                      Copy day to…
-                                    </button>
-                                  </div>
-                                </details>`)}
-                          </div> `
+                                      >
+                                        Add block</button
+                                      ><button
+                                        @click=${() => this.showCopy(day)}
+                                      >
+                                        Copy day to…
+                                      </button>
+                                    </div>
+                                  </details>`)}
+                            </div>
+                          </fieldset> `
                 : b `<div class="empty">
                           Add a room to set up its week in every schedule.
                         </div>`}
@@ -1645,6 +1845,118 @@
                 : A} `
             : A}
       ${this.copyDialog()}${this.createDialog()}${this.copyRoomsDialog()}`;
+        }
+        barAxis() {
+            return b `<div class="bar-axis" aria-hidden="true">
+      <span>00:00</span><span>06</span><span>12</span><span>18</span
+      ><span>24:00</span>
+    </div>`;
+        }
+        async openDay(day) {
+            this.openedDay = day;
+            await this.updateComplete;
+            for (const details of this.renderRoot.querySelectorAll(".day-list details"))
+                details.open = details.id === `day-${day}`;
+            const panel = this.renderRoot.querySelector(`#day-${day}`);
+            panel?.scrollIntoView?.({ block: "nearest", behavior: "instant" });
+            panel?.querySelector("summary")?.focus();
+        }
+        readBar(blocks, label, action, now, controls) {
+            let layout;
+            try {
+                layout = barLayout(blocks);
+            }
+            catch {
+                return b `<span class="muted"
+        >Correct this day’s values to preview its bar.</span
+      >`;
+            }
+            return b `<button
+      class="bar-button"
+      aria-label=${`${label}: ${layout.map((b) => `${b.start}–${clock(b.end)} ${temperature(b.target)}`).join(", ")}. Open day editor.`}
+      aria-controls=${controls ?? A}
+      aria-expanded=${controls
+            ? String(this.openedDay === controls.slice(4))
+            : A}
+      @click=${action}
+    >
+      ${layout.map((b$1) => b `<span
+            class="bar-segment"
+            title=${`${b$1.start}–${clock(b$1.end)} · ${temperature(b$1.target)}`}
+            style=${`left:${b$1.left}%;width:${b$1.width}%;background:${this.color(b$1.target)}`}
+          >
+            ${b$1.width >= 14
+            ? b `<span>${temperature(b$1.target)}</span>`
+            : A}
+          </span>`)}
+      ${now !== undefined
+            ? b `<span
+            class="now-marker"
+            style=${`left:${now / 14.4}%`}
+            title=${`Now · ${clock(now)}`}
+          ></span>`
+            : A}
+    </button>`;
+        }
+        overview() {
+            const clockNow = houseClock(new Date(), this.hass?.config?.time_zone);
+            const day = this.overviewDay || clockNow.day;
+            const now = this.selected === this.status?.configuration.active_schedule_id &&
+                day === clockNow.day
+                ? clockNow.minute
+                : undefined;
+            return b `<section
+      class="day-overview"
+      ?hidden=${this.view !== "overview"}
+      aria-label="Whole-house day overview"
+    >
+      <div class="field">
+        <label for="overview-day">Day</label
+        ><select
+          id="overview-day"
+          .value=${day}
+          @change=${(e) => {
+            this.overviewDay = e.target.value;
+        }}
+        >
+          ${weekdays.map((key, i) => b `<option value=${key} ?selected=${key === day}>
+                ${dayNames[i]}
+              </option>`)}
+        </select>
+      </div>
+      <p class="muted">
+        ${this.draft?.name} · Tap a room to open its
+        week.${now !== undefined
+            ? ` Now ${clock(now)} (Home Assistant time).`
+            : ""}
+      </p>
+      <div class="legend" aria-label="Temperature legend">
+        ${[10, 18, 21, 25].map((t) => b `<span
+              ><span
+                class="swatch"
+                style=${`background:${this.color(t)}`}
+              ></span
+              >${temperature(t)}</span
+            >`)}
+      </div>
+      ${this.barAxis()}
+      <div class="overview-rows">
+        ${Object.entries(this.status?.configuration.rooms ?? {}).map(([id, room]) => b `<div class="bar-row" data-room=${id}>
+              <span class="bar-name">${room.name}</span>
+              ${this.readBar(this.draft?.rooms[id]?.days[day] ?? defaultWeek().days[day], room.name, () => {
+            if (this.timeInputs.size) {
+                this.error =
+                    "Correct invalid start times before switching rooms.";
+                return;
+            }
+            this.selectedRoom = id;
+            this.block = null;
+            this.view = "rooms";
+            void this.openDay(day);
+        }, now)}
+            </div>`)}
+      </div>
+    </section>`;
         }
         blockEditor() {
             if (!this.block || !this.draft)
@@ -3216,7 +3528,33 @@
         });
     }
 
-    let status = fixture();
+    const query = new URLSearchParams(location.search);
+    function demoFixture() {
+        const data = fixture();
+        if (query.get("rooms") === "9") {
+            for (let i = 2; i < 9; i++) {
+                const letter = String.fromCharCode(97 + i), id = `room_${letter}`;
+                data.configuration.rooms[id] = {
+                    name: `Room ${letter.toUpperCase()}`,
+                    trvs: [`climate.trv_${letter}`],
+                    area_id: null,
+                    enabled: true,
+                };
+                data.rooms[id] = {
+                    ...structuredClone(data.rooms.room_a),
+                    name: `Room ${letter.toUpperCase()}`,
+                };
+                for (const schedule of Object.values(data.configuration.schedules)) {
+                    schedule.rooms[id] = structuredClone(schedule.rooms[i % 2 ? "room_a" : "room_b"]);
+                    for (const blocks of Object.values(schedule.rooms[id].days))
+                        for (const block of blocks)
+                            block.target += (i % 3) * 0.5;
+                }
+            }
+        }
+        return data;
+    }
+    let status = demoFixture();
     let nextId = 1;
     const listeners = new Set();
     const connectionEvents = {
@@ -3443,7 +3781,6 @@
         areas: { area_a: { name: "Area A" }, area_b: { name: "Area B" } },
         user: { is_admin: true },
     };
-    const query = new URLSearchParams(location.search);
     const width = query.get("width") === "390" ? "390px" : "1080px";
     document.documentElement.dataset.theme =
         query.get("theme") === "dark" ? "dark" : "light";
@@ -3468,7 +3805,7 @@
     });
     document.querySelector("#width").value = width;
     document.querySelector("#reset").addEventListener("click", () => {
-        status = fixture();
+        status = demoFixture();
         card.modeDraft = undefined;
         card.modeUntilDraft = undefined;
         card.scheduleDraft = undefined;

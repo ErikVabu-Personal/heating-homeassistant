@@ -848,3 +848,176 @@ it.each(["winter", ""])(
     );
   },
 );
+
+it("renders seven phone day bars and tapping opens that day's existing editor without saving", async () => {
+  const e = await mount();
+  const bars = [
+    ...e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+      ".phone-week .bar-button",
+    ),
+  ];
+  expect(bars).toHaveLength(7);
+  expect(bars[0].getAttribute("aria-label")).toContain("Monday");
+  expect(e.shadowRoot!.querySelector("#day-mon")!.hasAttribute("open")).toBe(
+    false,
+  );
+  bars[0].click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector<HTMLDetailsElement>("#day-mon")!.open,
+  ).toBe(true);
+  expect(bars[0].getAttribute("aria-expanded")).toBe("true");
+  input(e, "#target-mon-0", "23");
+  await tick(e);
+  expect(e.week.days.mon[0].target).toBe(23);
+  bars[1].click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector<HTMLDetailsElement>("#day-mon")!.open,
+  ).toBe(false);
+  expect(
+    e.shadowRoot!.querySelector<HTMLDetailsElement>("#day-tue")!.open,
+  ).toBe(true);
+  expect(e.saveSchedule).not.toHaveBeenCalled();
+});
+it("keeps five-minute blocks at their true width without a colliding text label", async () => {
+  const e = await mount();
+  const status = structuredClone(e.status!);
+  status.configuration.schedules.winter.rooms.room_a.days.mon = [
+    { start: "00:00", target: 18 },
+    { start: "00:05", target: 21 },
+  ];
+  e.status = status;
+  await tick(e);
+  const segment = e.shadowRoot!.querySelector<HTMLElement>(
+    ".phone-week .bar-segment",
+  )!;
+  expect(segment.style.width).toBe(`${100 / 288}%`);
+  expect(segment.textContent!.trim()).toBe("");
+  expect(segment.title).toContain("00:00–00:05 · 18°");
+});
+it("overview follows room order and selected day, and opens the tapped room without edits", async () => {
+  const e = await mount();
+  button(e, "Overview").click();
+  await tick(e);
+  expect(e.view).toBe("overview");
+  const rows = [
+    ...e.shadowRoot!.querySelectorAll<HTMLElement>(".overview-rows .bar-row"),
+  ];
+  expect(rows.map((r) => r.dataset.room)).toEqual(["room_a", "room_b"]);
+  const day = e.shadowRoot!.querySelector<HTMLSelectElement>("#overview-day")!;
+  day.value = "sat";
+  day.dispatchEvent(new Event("change"));
+  await tick(e);
+  expect(
+    e
+      .shadowRoot!.querySelector(".overview-rows .bar-button")!
+      .getAttribute("aria-label"),
+  ).toContain("08:00");
+  e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+    ".overview-rows .bar-button",
+  )[1].click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_b");
+  expect(e.view).toBe("rooms");
+  expect(
+    e.shadowRoot!.querySelector<HTMLDetailsElement>("#day-sat")!.open,
+  ).toBe(true);
+  expect(e.dirty).toBe(false);
+  expect(e.saveSchedule).not.toHaveBeenCalled();
+});
+it("now markers appear only for the active schedule on today in HA's zone and refresh each minute", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-11-22T23:30:00Z"));
+    const e = await mount();
+    e.hass = {
+      config: { time_zone: "Europe/Brussels" },
+    } as import("./types").Hass;
+    button(e, "Overview").click();
+    await tick(e);
+    expect(
+      e.shadowRoot!.querySelector<HTMLSelectElement>("#overview-day")!.value,
+    ).toBe("mon");
+    expect(e.shadowRoot!.querySelectorAll(".now-marker")).toHaveLength(2);
+    expect(
+      e.shadowRoot!.querySelector<HTMLElement>(".now-marker")!.style.left,
+    ).toBe(`${30 / 14.4}%`);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await tick(e);
+    expect(
+      e.shadowRoot!.querySelector<HTMLElement>(".now-marker")!.style.left,
+    ).toBe(`${31 / 14.4}%`);
+    e.overviewDay = "sun";
+    await tick(e);
+    expect(e.shadowRoot!.querySelectorAll(".now-marker")).toHaveLength(0);
+    e.overviewDay = "mon";
+    const select = e.shadowRoot!.querySelector<HTMLSelectElement>(
+      "[aria-label=Schedule]",
+    )!;
+    select.value = "autumn";
+    select.dispatchEvent(new Event("change"));
+    await tick(e);
+    expect(e.shadowRoot!.querySelectorAll(".now-marker")).toHaveLength(0);
+    e.remove();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("escapes malicious room names in the overview", async () => {
+  const e = await mount();
+  const status = structuredClone(e.status!);
+  status.configuration.rooms.room_a.name = '<img src=x onerror="alert(1)">';
+  e.status = status;
+  e.view = "overview";
+  await tick(e);
+  expect(e.shadowRoot!.querySelector(".overview-rows img")).toBeNull();
+  expect(
+    e.shadowRoot!.querySelector(".overview-rows .bar-name")!.textContent,
+  ).toBe(status.configuration.rooms.room_a.name);
+});
+it("lets read-only users open phone days and overview rows while controls stay disabled", async () => {
+  const e = await mount();
+  e.writable = false;
+  await tick(e);
+  const bar = e.shadowRoot!.querySelector<HTMLButtonElement>(
+    ".phone-week .bar-button",
+  )!;
+  expect(bar.matches(":disabled")).toBe(false);
+  bar.click();
+  await tick(e);
+  expect(
+    e
+      .shadowRoot!.querySelector<HTMLInputElement>("#target-mon-0")!
+      .matches(":disabled"),
+  ).toBe(true);
+  button(e, "Overview").click();
+  await tick(e);
+  e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+    ".overview-rows .bar-button",
+  )[1].click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_b");
+  expect(e.dirty).toBe(false);
+});
+
+it("overview navigation cannot bypass an invalid typed time or discard a room draft", async () => {
+  const e = await mount();
+  input(e, "#target-mon-0", "23");
+  input(e, "#start-mon-1", "invalid");
+  await tick(e);
+  button(e, "Overview").click();
+  await tick(e);
+  e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+    ".overview-rows .bar-button",
+  )[1].click();
+  await tick(e);
+  expect(e.selectedRoom).toBe("room_a");
+  expect(e.error).toContain("Correct invalid start times");
+  button(e, "Rooms").click();
+  await tick(e);
+  expect(e.week.days.mon[0].target).toBe(23);
+  expect(e.dirty).toBe(true);
+  expect(e.saveSchedule).not.toHaveBeenCalled();
+});

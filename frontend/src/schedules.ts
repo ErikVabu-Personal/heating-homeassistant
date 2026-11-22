@@ -1,4 +1,5 @@
 import { LitElement, html, nothing, css } from "lit";
+import { barLayout, houseClock } from "./bars";
 import { styles } from "./styles";
 import {
   defaultWeek,
@@ -23,6 +24,9 @@ import type { Block } from "./schedule";
 import type { Hass, Schedule, Status } from "./types";
 export class HeatingSchedules extends LitElement {
   static properties = {
+    view: { state: true },
+    overviewDay: { state: true },
+    openedDay: { state: true },
     status: { attribute: false },
     hass: { attribute: false },
     writable: { type: Boolean },
@@ -233,6 +237,111 @@ export class HeatingSchedules extends LitElement {
           grid-template-columns: 1fr 1fr;
         }
       }
+      .phone-week {
+        display: none;
+      }
+      .bar-row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .bar-name {
+        overflow-wrap: anywhere;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .bar-button {
+        width: 100%;
+        min-width: 0;
+        height: 44px;
+        padding: 0;
+        position: relative;
+        overflow: hidden;
+        border-radius: 6px;
+        background: var(--card-background-color);
+      }
+      .bar-segment {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        white-space: nowrap;
+        font-size: 12px;
+        border-right: 1px solid var(--divider-color);
+      }
+      .bar-segment > span {
+        position: relative;
+        z-index: 2;
+        background: inherit;
+        padding: 0 2px;
+      }
+      .bar-axis {
+        margin-left: 132px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--secondary-text-color);
+      }
+      .now-marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: var(--primary-text-color);
+        z-index: 1;
+        pointer-events: none;
+      }
+      .day-overview {
+        margin-top: 16px;
+      }
+      .overview-rows {
+        max-height: 640px;
+        overflow-y: auto;
+        padding: 4px;
+      }
+      .view-toggle {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .view-toggle [aria-pressed="true"] {
+        border-color: var(--primary-color);
+        font-weight: 700;
+      }
+      @container (max-width:600px) {
+        .phone-week {
+          display: block;
+        }
+        .phone-week .bar-row {
+          grid-template-columns: 38px minmax(0, 1fr);
+          gap: 8px;
+        }
+        .phone-week .bar-axis {
+          margin-left: 46px;
+        }
+        .day-overview .bar-row {
+          grid-template-columns: 72px minmax(0, 1fr);
+          gap: 8px;
+          margin: 8px 0;
+        }
+        .day-overview .bar-axis {
+          margin-left: 80px;
+        }
+        .overview-rows {
+          max-height: 620px;
+        }
+        .day-list details {
+          display: none;
+        }
+        .day-list details[open] {
+          display: block;
+        }
+      }
       .toolbar {
         flex-wrap: wrap;
       }
@@ -255,6 +364,18 @@ export class HeatingSchedules extends LitElement {
       }
     `,
   ];
+  view: "rooms" | "overview" = "rooms";
+  overviewDay = "";
+  openedDay = "";
+  private clockTimer?: ReturnType<typeof setInterval>;
+  connectedCallback() {
+    super.connectedCallback();
+    this.clockTimer = setInterval(() => this.requestUpdate(), 60_000);
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this.clockTimer);
+  }
   status?: Status;
   hass?: Hass;
   writable = false;
@@ -284,6 +405,9 @@ export class HeatingSchedules extends LitElement {
       this.draft = undefined;
       this.selected = "";
       this.selectedRoom = "";
+      this.view = "rooms";
+      this.overviewDay = "";
+      this.openedDay = "";
       this.block = null;
       this.error = "";
       this.copyFrom = null;
@@ -633,7 +757,26 @@ export class HeatingSchedules extends LitElement {
                   }}
                 />
               </div>
-              <div class="schedule-layout">
+              <div class="view-toggle" aria-label="Schedule view">
+                <button
+                  aria-pressed=${this.view === "rooms"}
+                  @click=${() => {
+                    this.view = "rooms";
+                  }}
+                >
+                  Rooms
+                </button>
+                <button
+                  aria-pressed=${this.view === "overview"}
+                  @click=${() => {
+                    this.view = "overview";
+                  }}
+                >
+                  Overview
+                </button>
+              </div>
+              ${this.overview()}
+              <div class="schedule-layout" ?hidden=${this.view !== "rooms"}>
                 <div class="room-picker" aria-label="Rooms in schedule">
                   ${rooms.map(
                     ([id, room]) =>
@@ -652,7 +795,7 @@ export class HeatingSchedules extends LitElement {
                   )}
                 </div>
                 <div class="week-editor">
-                  <fieldset ?disabled=${disabled}>
+                  <fieldset>
                     ${this.selectedRoom
                       ? html`<div class="toolbar">
                             <div>
@@ -667,7 +810,10 @@ export class HeatingSchedules extends LitElement {
                                   : "Activate this schedule to use these weeks."}</small
                               >
                             </div>
-                            <button @click=${() => this.showDialog("rooms")}>
+                            <button
+                              ?disabled=${disabled}
+                              @click=${() => this.showDialog("rooms")}
+                            >
                               Copy this room’s week to…
                             </button>
                           </div>
@@ -683,230 +829,269 @@ export class HeatingSchedules extends LitElement {
                                 >`,
                             )}
                           </div>
-                          <div class="week" aria-label="Weekly schedule grid">
-                            <div class="axis">
-                              <span>00:00</span><span>06:00</span
-                              ><span>12:00</span><span>18:00</span
-                              ><span>24:00</span>
-                            </div>
+                          <div class="phone-week" aria-label="Weekly day bars">
+                            <p class="muted">
+                              Tap a day to edit its times and temperatures.
+                            </p>
+                            ${this.barAxis()}
                             ${weekdays.map(
                               (day, i) =>
-                                html`<div class="day">
-                                  <span class="day-label">${dayNames[i]}</span>
-                                  <div class="track">
-                                    ${week.days[day].map((b, j) => {
-                                      const start = minutes(b.start),
-                                        end =
-                                          j + 1 < week.days[day].length
-                                            ? minutes(
-                                                week.days[day][j + 1].start,
-                                              )
-                                            : 1440;
-                                      return html` <button
-                                          class="schedule-block"
-                                          style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b.target)}`}
-                                          aria-label=${`${dayNames[i]} ${b.start} to ${clock(end)} · ${temperature(b.target)}. Arrow keys change temperature.`}
-                                          @click=${() => {
-                                            this.block = { day, index: j };
-                                          }}
-                                          @keydown=${(e: KeyboardEvent) => {
-                                            if (
-                                              [
-                                                "ArrowUp",
-                                                "ArrowDown",
-                                                "ArrowLeft",
-                                                "ArrowRight",
-                                              ].includes(e.key)
-                                            ) {
-                                              e.preventDefault();
-                                              this.change(
-                                                day,
-                                                week.days[day].map((x, k) =>
-                                                  k === j
-                                                    ? {
-                                                        ...x,
-                                                        target: temperatureStep(
-                                                          x.target,
-                                                          [
-                                                            "ArrowUp",
-                                                            "ArrowRight",
-                                                          ].includes(e.key)
-                                                            ? 1
-                                                            : -1,
-                                                        ),
-                                                      }
-                                                    : x,
-                                                ),
-                                              );
-                                            }
-                                          }}
-                                        >
-                                          ${temperature(b.target)}
-                                        </button>
-                                        ${j
-                                          ? html`<button
-                                              class="boundary"
-                                              style=${`left:${start / 14.4}%`}
-                                              aria-label=${`Move ${dayNames[i]} boundary at ${b.start}`}
-                                              @pointerdown=${(
-                                                e: PointerEvent,
-                                              ) => this.drag(e, day, j)}
-                                              @keydown=${(e: KeyboardEvent) => {
-                                                if (
-                                                  [
-                                                    "ArrowLeft",
-                                                    "ArrowRight",
-                                                  ].includes(e.key)
-                                                ) {
-                                                  e.preventDefault();
-                                                  this.change(
-                                                    day,
-                                                    moveBoundary(
-                                                      week.days[day],
-                                                      j,
-                                                      start +
-                                                        (e.key === "ArrowRight"
-                                                          ? 5
-                                                          : -5),
-                                                    ),
-                                                  );
-                                                }
-                                              }}
-                                            ></button>`
-                                          : nothing}`;
-                                    })}
-                                    <button
-                                      class="split-time"
-                                      aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
-                                      @click=${(e: MouseEvent) =>
-                                        this.attempt(() => {
-                                          const rect = (
-                                            e.currentTarget as HTMLElement
-                                          ).getBoundingClientRect();
-                                          const at =
-                                            e.detail === 0
-                                              ? 720
-                                              : ((e.clientX - rect.left) /
-                                                  rect.width) *
-                                                1440;
-                                          this.change(
-                                            day,
-                                            splitBlock(week.days[day], at),
-                                          );
-                                        })}
-                                    >
-                                      + Tap timeline to split
-                                    </button>
-                                  </div>
+                                html`<div class="bar-row">
+                                  <span class="bar-name"
+                                    >${dayNames[i].slice(0, 3)}</span
+                                  >
+                                  ${this.readBar(
+                                    week.days[day],
+                                    dayNames[i],
+                                    () => this.openDay(day),
+                                    undefined,
+                                    `day-${day}`,
+                                  )}
                                 </div>`,
                             )}
                           </div>
-                          ${this.blockEditor()}
-                          <div class="day-list">
-                            <h3>Edit times & copy days</h3>
-                            <p class="muted">
-                              Five-minute times, half-degree temperatures. Each
-                              day starts at 00:00.
-                            </p>
-                            ${weekdays.map(
-                              (day, i) =>
-                                html`<details>
-                                  <summary>
-                                    ${dayNames[i]} · ${week.days[day].length}
-                                    blocks
-                                  </summary>
-                                  ${week.days[day].map(
-                                    (b, j) =>
-                                      html`<div class="block-row">
-                                        <div class="field">
-                                          <label for=${`start-${day}-${j}`}
-                                            >Start time</label
-                                          ><input
-                                            id=${`start-${day}-${j}`}
-                                            aria-invalid=${this.timeInputs.has(
-                                              `${day}-${j}`,
-                                            )}
-                                            type="text"
-                                            inputmode="text"
-                                            .value=${this.timeInputs.get(
-                                              `${day}-${j}`,
-                                            ) ??
-                                            scheduleTime(
-                                              b.start,
-                                              this.hass?.locale,
-                                            )}
-                                            ?disabled=${!j}
-                                            @change=${(e: Event) =>
-                                              this.editTime(day, j, e)}
-                                          />
-                                        </div>
-                                        <div class="field">
-                                          <label for=${`target-${day}-${j}`}
-                                            >Temperature °C</label
-                                          ><input
-                                            id=${`target-${day}-${j}`}
-                                            type="number"
-                                            min="5"
-                                            max="30"
-                                            step="0.5"
-                                            .value=${String(b.target)}
-                                            @change=${(e: Event) =>
-                                              this.change(
-                                                day,
-                                                week.days[day].map((x, k) =>
-                                                  k === j
-                                                    ? {
-                                                        ...x,
-                                                        target: Number(
-                                                          (
-                                                            e.target as HTMLInputElement
-                                                          ).value,
-                                                        ),
-                                                      }
-                                                    : x,
-                                                ),
-                                              )}
-                                          />
-                                        </div>
-                                        <button
-                                          ?disabled=${!j}
-                                          @click=${() => {
+                          <fieldset ?disabled=${disabled}>
+                            <div class="week" aria-label="Weekly schedule grid">
+                              <div class="axis">
+                                <span>00:00</span><span>06:00</span
+                                ><span>12:00</span><span>18:00</span
+                                ><span>24:00</span>
+                              </div>
+                              ${weekdays.map(
+                                (day, i) =>
+                                  html`<div class="day">
+                                    <span class="day-label"
+                                      >${dayNames[i]}</span
+                                    >
+                                    <div class="track">
+                                      ${week.days[day].map((b, j) => {
+                                        const start = minutes(b.start),
+                                          end =
+                                            j + 1 < week.days[day].length
+                                              ? minutes(
+                                                  week.days[day][j + 1].start,
+                                                )
+                                              : 1440;
+                                        return html` <button
+                                            class="schedule-block"
+                                            style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b.target)}`}
+                                            aria-label=${`${dayNames[i]} ${b.start} to ${clock(end)} · ${temperature(b.target)}. Arrow keys change temperature.`}
+                                            @click=${() => {
+                                              this.block = { day, index: j };
+                                            }}
+                                            @keydown=${(e: KeyboardEvent) => {
+                                              if (
+                                                [
+                                                  "ArrowUp",
+                                                  "ArrowDown",
+                                                  "ArrowLeft",
+                                                  "ArrowRight",
+                                                ].includes(e.key)
+                                              ) {
+                                                e.preventDefault();
+                                                this.change(
+                                                  day,
+                                                  week.days[day].map((x, k) =>
+                                                    k === j
+                                                      ? {
+                                                          ...x,
+                                                          target:
+                                                            temperatureStep(
+                                                              x.target,
+                                                              [
+                                                                "ArrowUp",
+                                                                "ArrowRight",
+                                                              ].includes(e.key)
+                                                                ? 1
+                                                                : -1,
+                                                            ),
+                                                        }
+                                                      : x,
+                                                  ),
+                                                );
+                                              }
+                                            }}
+                                          >
+                                            ${temperature(b.target)}
+                                          </button>
+                                          ${j
+                                            ? html`<button
+                                                class="boundary"
+                                                style=${`left:${start / 14.4}%`}
+                                                aria-label=${`Move ${dayNames[i]} boundary at ${b.start}`}
+                                                @pointerdown=${(
+                                                  e: PointerEvent,
+                                                ) => this.drag(e, day, j)}
+                                                @keydown=${(
+                                                  e: KeyboardEvent,
+                                                ) => {
+                                                  if (
+                                                    [
+                                                      "ArrowLeft",
+                                                      "ArrowRight",
+                                                    ].includes(e.key)
+                                                  ) {
+                                                    e.preventDefault();
+                                                    this.change(
+                                                      day,
+                                                      moveBoundary(
+                                                        week.days[day],
+                                                        j,
+                                                        start +
+                                                          (e.key ===
+                                                          "ArrowRight"
+                                                            ? 5
+                                                            : -5),
+                                                      ),
+                                                    );
+                                                  }
+                                                }}
+                                              ></button>`
+                                            : nothing}`;
+                                      })}
+                                      <button
+                                        class="split-time"
+                                        aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
+                                        @click=${(e: MouseEvent) =>
+                                          this.attempt(() => {
+                                            const rect = (
+                                              e.currentTarget as HTMLElement
+                                            ).getBoundingClientRect();
+                                            const at =
+                                              e.detail === 0
+                                                ? 720
+                                                : ((e.clientX - rect.left) /
+                                                    rect.width) *
+                                                  1440;
                                             this.change(
                                               day,
-                                              removeBlock(week.days[day], j),
+                                              splitBlock(week.days[day], at),
                                             );
-                                            this.block = null;
-                                          }}
-                                        >
-                                          Remove<span class="sr-only">
-                                            ${dayNames[i]} ${b.start}</span
+                                          })}
+                                      >
+                                        + Tap timeline to split
+                                      </button>
+                                    </div>
+                                  </div>`,
+                              )}
+                            </div>
+                            ${this.blockEditor()}
+                            <div class="day-list">
+                              <h3>Edit times & copy days</h3>
+                              <p class="muted">
+                                Five-minute times, half-degree temperatures.
+                                Each day starts at 00:00.
+                              </p>
+                              ${weekdays.map(
+                                (day, i) =>
+                                  html`<details
+                                    id=${`day-${day}`}
+                                    @toggle=${(e: Event) => {
+                                      if ((e.target as HTMLDetailsElement).open)
+                                        this.openedDay = day;
+                                      else if (this.openedDay === day)
+                                        this.openedDay = "";
+                                    }}
+                                  >
+                                    <summary>
+                                      ${dayNames[i]} · ${week.days[day].length}
+                                      blocks
+                                    </summary>
+                                    ${week.days[day].map(
+                                      (b, j) =>
+                                        html`<div class="block-row">
+                                          <div class="field">
+                                            <label for=${`start-${day}-${j}`}
+                                              >Start time</label
+                                            ><input
+                                              id=${`start-${day}-${j}`}
+                                              aria-invalid=${this.timeInputs.has(
+                                                `${day}-${j}`,
+                                              )}
+                                              type="text"
+                                              inputmode="text"
+                                              .value=${this.timeInputs.get(
+                                                `${day}-${j}`,
+                                              ) ??
+                                              scheduleTime(
+                                                b.start,
+                                                this.hass?.locale,
+                                              )}
+                                              ?disabled=${!j}
+                                              @change=${(e: Event) =>
+                                                this.editTime(day, j, e)}
+                                            />
+                                          </div>
+                                          <div class="field">
+                                            <label for=${`target-${day}-${j}`}
+                                              >Temperature °C</label
+                                            ><input
+                                              id=${`target-${day}-${j}`}
+                                              type="number"
+                                              min="5"
+                                              max="30"
+                                              step="0.5"
+                                              .value=${String(b.target)}
+                                              @change=${(e: Event) =>
+                                                this.change(
+                                                  day,
+                                                  week.days[day].map((x, k) =>
+                                                    k === j
+                                                      ? {
+                                                          ...x,
+                                                          target: Number(
+                                                            (
+                                                              e.target as HTMLInputElement
+                                                            ).value,
+                                                          ),
+                                                        }
+                                                      : x,
+                                                  ),
+                                                )}
+                                            />
+                                          </div>
+                                          <button
+                                            ?disabled=${!j}
+                                            @click=${() => {
+                                              this.change(
+                                                day,
+                                                removeBlock(week.days[day], j),
+                                              );
+                                              this.block = null;
+                                            }}
                                           >
-                                        </button>
-                                      </div>`,
-                                  )}
-                                  <div class="actions">
-                                    <button
-                                      @click=${() =>
-                                        this.attempt(() => {
-                                          this.change(
-                                            day,
-                                            splitBlock(
-                                              week.days[day],
-                                              minutes(
-                                                week.days[day].at(-1)!.start,
-                                              ) + 5,
-                                            ),
-                                          );
-                                        })}
-                                    >
-                                      Add block</button
-                                    ><button @click=${() => this.showCopy(day)}>
-                                      Copy day to…
-                                    </button>
-                                  </div>
-                                </details>`,
-                            )}
-                          </div> `
+                                            Remove<span class="sr-only">
+                                              ${dayNames[i]} ${b.start}</span
+                                            >
+                                          </button>
+                                        </div>`,
+                                    )}
+                                    <div class="actions">
+                                      <button
+                                        @click=${() =>
+                                          this.attempt(() => {
+                                            this.change(
+                                              day,
+                                              splitBlock(
+                                                week.days[day],
+                                                minutes(
+                                                  week.days[day].at(-1)!.start,
+                                                ) + 5,
+                                              ),
+                                            );
+                                          })}
+                                      >
+                                        Add block</button
+                                      ><button
+                                        @click=${() => this.showCopy(day)}
+                                      >
+                                        Copy day to…
+                                      </button>
+                                    </div>
+                                  </details>`,
+                              )}
+                            </div>
+                          </fieldset> `
                       : html`<div class="empty">
                           Add a room to set up its week in every schedule.
                         </div>`}
@@ -985,6 +1170,145 @@ export class HeatingSchedules extends LitElement {
               : nothing} `
         : nothing}
       ${this.copyDialog()}${this.createDialog()}${this.copyRoomsDialog()}`;
+  }
+  private barAxis() {
+    return html`<div class="bar-axis" aria-hidden="true">
+      <span>00:00</span><span>06</span><span>12</span><span>18</span
+      ><span>24:00</span>
+    </div>`;
+  }
+  private async openDay(day: string) {
+    this.openedDay = day;
+    await this.updateComplete;
+    for (const details of this.renderRoot.querySelectorAll<HTMLDetailsElement>(
+      ".day-list details",
+    ))
+      details.open = details.id === `day-${day}`;
+    const panel = this.renderRoot.querySelector<HTMLDetailsElement>(
+      `#day-${day}`,
+    );
+    panel?.scrollIntoView?.({ block: "nearest", behavior: "instant" });
+    panel?.querySelector<HTMLElement>("summary")?.focus();
+  }
+  private readBar(
+    blocks: Block[],
+    label: string,
+    action: () => void,
+    now?: number,
+    controls?: string,
+  ) {
+    let layout: ReturnType<typeof barLayout>;
+    try {
+      layout = barLayout(blocks);
+    } catch {
+      return html`<span class="muted"
+        >Correct this day’s values to preview its bar.</span
+      >`;
+    }
+    return html`<button
+      class="bar-button"
+      aria-label=${`${label}: ${layout.map((b) => `${b.start}–${clock(b.end)} ${temperature(b.target)}`).join(", ")}. Open day editor.`}
+      aria-controls=${controls ?? nothing}
+      aria-expanded=${controls
+        ? String(this.openedDay === controls.slice(4))
+        : nothing}
+      @click=${action}
+    >
+      ${layout.map(
+        (b) =>
+          html`<span
+            class="bar-segment"
+            title=${`${b.start}–${clock(b.end)} · ${temperature(b.target)}`}
+            style=${`left:${b.left}%;width:${b.width}%;background:${this.color(b.target)}`}
+          >
+            ${b.width >= 14
+              ? html`<span>${temperature(b.target)}</span>`
+              : nothing}
+          </span>`,
+      )}
+      ${now !== undefined
+        ? html`<span
+            class="now-marker"
+            style=${`left:${now / 14.4}%`}
+            title=${`Now · ${clock(now)}`}
+          ></span>`
+        : nothing}
+    </button>`;
+  }
+  private overview() {
+    const clockNow = houseClock(new Date(), this.hass?.config?.time_zone);
+    const day = this.overviewDay || clockNow.day;
+    const now =
+      this.selected === this.status?.configuration.active_schedule_id &&
+      day === clockNow.day
+        ? clockNow.minute
+        : undefined;
+    return html`<section
+      class="day-overview"
+      ?hidden=${this.view !== "overview"}
+      aria-label="Whole-house day overview"
+    >
+      <div class="field">
+        <label for="overview-day">Day</label
+        ><select
+          id="overview-day"
+          .value=${day}
+          @change=${(e: Event) => {
+            this.overviewDay = (e.target as HTMLSelectElement).value;
+          }}
+        >
+          ${weekdays.map(
+            (key, i) =>
+              html`<option value=${key} ?selected=${key === day}>
+                ${dayNames[i]}
+              </option>`,
+          )}
+        </select>
+      </div>
+      <p class="muted">
+        ${this.draft?.name} · Tap a room to open its
+        week.${now !== undefined
+          ? ` Now ${clock(now)} (Home Assistant time).`
+          : ""}
+      </p>
+      <div class="legend" aria-label="Temperature legend">
+        ${[10, 18, 21, 25].map(
+          (t) =>
+            html`<span
+              ><span
+                class="swatch"
+                style=${`background:${this.color(t)}`}
+              ></span
+              >${temperature(t)}</span
+            >`,
+        )}
+      </div>
+      ${this.barAxis()}
+      <div class="overview-rows">
+        ${Object.entries(this.status?.configuration.rooms ?? {}).map(
+          ([id, room]) =>
+            html`<div class="bar-row" data-room=${id}>
+              <span class="bar-name">${room.name}</span>
+              ${this.readBar(
+                this.draft?.rooms[id]?.days[day] ?? defaultWeek().days[day],
+                room.name,
+                () => {
+                  if (this.timeInputs.size) {
+                    this.error =
+                      "Correct invalid start times before switching rooms.";
+                    return;
+                  }
+                  this.selectedRoom = id;
+                  this.block = null;
+                  this.view = "rooms";
+                  void this.openDay(day);
+                },
+                now,
+              )}
+            </div>`,
+        )}
+      </div>
+    </section>`;
   }
   private blockEditor() {
     if (!this.block || !this.draft) return nothing;
