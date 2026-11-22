@@ -1,10 +1,11 @@
-name: Pure logic
+name: Central Heating validation
 on:
   push:
     branches: [main, dev]
   pull_request:
 jobs:
   test:
+    name: Supported pair (blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
@@ -16,13 +17,13 @@ jobs:
           apt-get install -y --no-install-recommends git curl xz-utils ca-certificates
           rm -rf /var/lib/apt/lists/*
           test "$(uname -m)" = x86_64
-          node_archive=node-v20.20.2-linux-x64.tar.xz
-          curl --fail --location --retry 3 --output "/tmp/$node_archive" "https://nodejs.org/dist/v20.20.2/$node_archive"
+          node_archive=node-v22.23.5-linux-x64.tar.xz
+          curl --fail --location --retry 3 --output "/tmp/$node_archive" "https://nodejs.org/dist/v22.23.5/$node_archive"
           cd /tmp
-          echo "df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d  $node_archive" | sha256sum --check -
+          echo "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8  $node_archive" | sha256sum --check -
           tar -xJf "$node_archive" -C /usr/local --strip-components=1
           rm "$node_archive"
-          node --version | grep '^v20[.]'
+          node --version | grep '^v22[.]'
           python -c 'import sys; assert sys.version_info >= (3, 14, 2)'
       - uses: actions/checkout@v4
       - name: Install test tools
@@ -40,5 +41,52 @@ jobs:
         run: ruff check .
       - name: Format
         run: ruff format --check .
-      - name: Pure logic tests
+      - name: Central Heating validation tests
         run: pytest -q
+
+  compatibility:
+    name: HA 2026.11.2 compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: python:3.14-slim-bookworm
+    steps:
+      - name: Install checkout runtime
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git curl xz-utils ca-certificates
+          rm -rf /var/lib/apt/lists/*
+          test "$(uname -m)" = x86_64
+          node_archive=node-v22.23.5-linux-x64.tar.xz
+          curl --fail --location --retry 3 --output "/tmp/$node_archive" "https://nodejs.org/dist/v22.23.5/$node_archive"
+          cd /tmp
+          echo "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8  $node_archive" | sha256sum --check -
+          tar -xJf "$node_archive" -C /usr/local --strip-components=1
+          rm "$node_archive"
+          node --version | grep '^v22[.]'
+          python -c 'import sys; assert sys.version_info >= (3, 14, 2)'
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          python - <<'PYTHON'
+          import subprocess
+          import sys
+          import tomllib
+          with open("pyproject.toml", "rb") as config:
+              packages = tomllib.load(config)["dependency-groups"]["dev"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install",
+                                 "--disable-pip-version-check", *packages])
+          PYTHON
+      - name: Install HA compatibility target over the supported pair
+        run: python -m pip install --disable-pip-version-check homeassistant==2026.11.2
+      - name: Lint
+        run: ruff check .
+      - name: Format
+        run: ruff format --check .
+      - name: Unit tests on HA 2026.11.2 (required)
+        run: pytest -q -p no:homeassistant --ignore=tests/integration
+      - name: Import every integration module on HA 2026.11.2 (required)
+        run: python scripts/import_smoke.py
+      - name: Integration tests with old plugin (expected incompatibility until 2026.11 plugin)
+        continue-on-error: true
+        run: python -c "import homeassistant; import pytest; raise SystemExit(pytest.main(['-q']))"

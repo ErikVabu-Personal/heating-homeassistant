@@ -108,19 +108,26 @@ def test_outlier_filter_waits_for_a_full_window(length):
     assert result.state.raw_values[-1] == 20
 
 
-def test_sustained_step_recovers_within_a_few_samples():
-    state = SmoothingState()
-    for timestamp in range(0, 100, 10):
+def test_repeated_raw_values_do_not_fill_outlier_window_but_lowpass_advances():
+    state = smooth(SmoothingInput(17, 0)).state
+    for timestamp in range(10, 100, 10):
         state = smooth(SmoothingInput(17, timestamp), state).state
-    outputs = []
-    for timestamp in range(100, 3700, 10):
-        result = smooth(SmoothingInput(20, timestamp), state)
-        state = result.state
-        outputs.append(result.value)
-    assert outputs[:2] == [17, 17]
-    assert outputs[2] > 17
-    assert state.raw_values == (20, 20, 20, 20)
-    assert outputs[-1] == 20
+    assert state.raw_values == (17,)
+    state = smooth(SmoothingInput(20, 100), state).state
+    initial = state.value
+    for timestamp in range(110, 1000, 10):
+        state = smooth(SmoothingInput(20, timestamp), state).state
+    assert state.raw_values == (17, 20)
+    assert state.value > initial
+
+
+def test_repeated_rejected_raw_keeps_same_lowpass_input():
+    state = SmoothingState((17, 17.1, 16.9, 17), 16, 0)
+    first = smooth(SmoothingInput(30, 10), state)
+    again = smooth(SmoothingInput(30, 300), first.state)
+    assert again.state.raw_values == first.state.raw_values
+    assert again.state.input_value == 17
+    assert again.value == round(16 + (1 - exp(-1)), 2)
 
 
 def test_single_spike_is_rejected_but_remains_in_raw_window():

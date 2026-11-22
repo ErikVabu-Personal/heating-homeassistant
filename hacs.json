@@ -1,1 +1,5 @@
-{"name": "Central Heating", "render_readme": true}
+{
+  "name": "Central Heating",
+  "render_readme": true,
+  "homeassistant": "2026.10.0"
+}

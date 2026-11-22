@@ -1,6 +1,6 @@
 # Central Heating: design (v1)
 
-**Status:** proposed, for review before building starts.
+**Status:** implementation in progress; PR 2 review decisions incorporated.
 
 ## 1. Goal
 
@@ -106,7 +106,9 @@ Defaults: `hysteresis` 0.3 °C (allowed 0.1–1.0, step 0.1); `frost_temperature
 `virtual_temp` = smoothed `virtual_temp_raw`. The low-pass filter is time-based, so it doesn't depend on how often
 the raw value happens to change.
 
-1. **Outlier rejection:** keep a window of the last 4 raw values, rejected ones included; a value is only
+1. **Outlier rejection:** sample only when the raw virtual temperature changes, as HA `filter` did.
+   Repeated raw values retain the previous accepted low-pass input; the time-based low-pass still updates on
+   every recalculation. Keep a window of the last 4 changed raw values, rejected ones included; a value is only
    rejected once the window is full. If a new value differs from the previous window's median by more than
    1.5 °C, use the median instead for the low-pass input, while storing the raw sample in the window.
 2. **Low-pass:** `y ← y + (x − y) · (1 − e^(−Δt/τ))`, with τ = 300 s and Δt the seconds since the last update. The
@@ -123,10 +125,12 @@ class BoilerCommand:
     setpoint: float             # virtual_setpoint
 
 class BoilerAdapter(Protocol):
+    last_success: bool           # whether the latest operation was delivered
     async def async_start(self) -> None: ...
     async def async_apply(self, cmd: BoilerCommand, *, keepalive: bool) -> None: ...
     async def async_stop(self, *, unloading: bool) -> None: ...
 ```
+Recalculation and publishing do nothing until `hass.state is CoreState.running`.
 The engine builds a `BoilerCommand` on every recalculation and calls `async_apply` when the command changes, and
 every 30 s with `keepalive=True`.
 
@@ -141,7 +145,7 @@ trailing slash. It's configurable.
 | Change or keep-alive | `mode` | `heat` or `off` |
 
 - **Delivery:** QoS 0, retain false, the same as the package.
-- **Before sending:** check that the MQTT integration is loaded. If it isn't, log it and raise a Repairs issue,
+- **Before sending:** check that the MQTT integration is loaded. If it isn't, log once per unavailable transition and raise a Repairs issue,
   instead of failing.
 - **Unloading:** when the config entry is unloaded or removed (not when Home Assistant shuts down), and shadow mode
   is off, send `mode = off` once. A controller left with a stale temperature and setpoint must not keep heating.
@@ -156,9 +160,10 @@ trailing slash. It's configurable.
 
 ## 6. Rooms, profiles, modes and overrides
 
-### 6.1 Data model (Store, version 1)
+### 6.1 Data model (Store, version 1, minor version 2)
 ```jsonc
 {
+  "shadow": true,                              // stored, on for new entries
   "settings": {
     "frost_temperature": 16.0,
     "hysteresis": 0.3,
@@ -186,7 +191,15 @@ trailing slash. It's configurable.
 }
 ```
 
+Store minor-version migration validates and fills missing defaults (including `shadow: true`) from earlier
+version-1 data. Updates are validated before publication and serialized under a lock. HA's `Store` catches and
+logs disk-write failures: the new in-memory snapshot still takes effect; it may not survive a restart.
+Removing the config entry removes its Store file and MQTT repair issue.
+
 **Validation, on every write:**
+- **Settings:** away temperature is 5–30 in steps of 0.5; override duration is 1–10080 integer minutes.
+- **Overrides:** targets are 5–30 in steps of 0.5. Services and entity actions raise `ServiceValidationError`
+  for invalid input.
 - **Blocks:** each day has at least one block, the first starting at `00:00`. Start times are `HH:MM` on a 5-minute
   grid, strictly increasing. Targets are 5.0–30.0 in steps of 0.5.
 - **TRVs:** each TRV belongs to at most one room. A room has at least one TRV.
@@ -252,7 +265,7 @@ All unique IDs are `<entry_id>_<key>`. Entity names are translated; there are no
 | `select` | mode | `auto`, `away`, `summer`, `manual` |
 | `switch` | shadow mode | §5.4 |
 | `sensor` | demand count, virtual temperature, virtual temperature (raw), virtual setpoint | °C where it applies, with `state_class: measurement` |
-| `binary_sensor` | boiler call | on when the computed command has `heat = true`. Attributes: the last command, the last time it was sent, `shadow`. |
+| `binary_sensor` | boiler call | on when the computed command has `heat = true`. Attributes: the last command and `shadow`. Send timing is diagnostics-only to avoid recorder churn. |
 | `number` | frost temperature, hysteresis, away temperature | write to `settings` |
 
 The room attributes `next_change` and `next_target` describe the next effective target change from §6.4,
@@ -345,7 +358,8 @@ hacs.json  README.md  .gitignore
 **`hacs.json`:** `{"name": "Central Heating", "render_readme": true}`.
 
 **Config flow:** step `user` takes a name, the boiler adapter (only `diyless_mqtt` in v1) and the MQTT topic prefix.
-It aborts with a clear message if MQTT isn't set up. The options flow edits the prefix.
+It aborts with a clear message if MQTT isn't set up. The options flow edits the prefix. Duplicate effective prefixes are rejected; an unchanged prefix does not reload
+the entry (reloading can send `mode=off`). Prefix validation runs inside the step so form schemas serialize.
 
 ## 11. Testing
 
@@ -359,7 +373,9 @@ It aborts with a clear message if MQTT isn't set up. The options flow edits the 
 - **Smoothing:** outlier replacement, time-based convergence (Δt independence), unknown input.
 - **Schedule:**
   - the current block and the next block start across midnight and weekday changes;
-  - daylight-saving changes in both directions;
+  - daylight-saving changes in both directions, coinciding starts and skipped dates;
+  - next-target-change lookup across equal-target blocks, midnight and weekdays;
+  - a constant week's seven-day override cap, and a change deferred by a DST gap to the following week;
   - every validation rule.
 - **Golden test:** feed the same TRV fixtures to a Python copy of the package's templates and to `demand.py`. The
   results must be identical, apart from the documented rounding fix.

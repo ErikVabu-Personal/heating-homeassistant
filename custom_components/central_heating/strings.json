@@ -1,0 +1,85 @@
+{
+  "title": "Central Heating",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Central Heating",
+        "data": {
+          "name": "Name",
+          "adapter": "Boiler adapter",
+          "prefix": "MQTT topic prefix"
+        }
+      }
+    },
+    "error": {
+      "invalid_config": "Enter a valid MQTT topic prefix without wildcards or a trailing slash.",
+      "already_configured": "This boiler prefix is already configured."
+    },
+    "abort": {
+      "mqtt_required": "Set up the MQTT integration first.",
+      "already_configured": "This boiler prefix is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Boiler options",
+        "data": {
+          "prefix": "MQTT topic prefix"
+        }
+      }
+    },
+    "error": {
+      "invalid_config": "Enter a valid MQTT topic prefix without wildcards or a trailing slash.",
+      "already_configured": "This boiler prefix is already configured."
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode"
+      }
+    },
+    "switch": {
+      "shadow": {
+        "name": "Shadow mode"
+      }
+    },
+    "sensor": {
+      "demand_count": {
+        "name": "Demand count"
+      },
+      "virtual_temperature": {
+        "name": "Virtual temperature"
+      },
+      "virtual_temperature_raw": {
+        "name": "Raw virtual temperature"
+      },
+      "virtual_setpoint": {
+        "name": "Virtual setpoint"
+      }
+    },
+    "binary_sensor": {
+      "boiler_call": {
+        "name": "Boiler call"
+      }
+    },
+    "number": {
+      "frost_temperature": {
+        "name": "Frost temperature"
+      },
+      "hysteresis": {
+        "name": "Hysteresis"
+      },
+      "away_temperature": {
+        "name": "Away temperature"
+      }
+    }
+  },
+  "issues": {
+    "mqtt_unavailable": {
+      "title": "MQTT unavailable",
+      "description": "Central Heating cannot send boiler commands. Check the MQTT integration."
+    }
+  }
+}

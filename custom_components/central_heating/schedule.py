@@ -146,9 +146,9 @@ def schedule_at(profile: Profile, now: datetime, zone: ZoneInfo) -> ScheduleResu
     today = now.astimezone(zone).date()
     days = {day.weekday: day for day in profile.days}
     starts: list[BlockStart] = []
-    # Include the previous day for midnight rollover and a full future week.
-    # The extra day also covers zones that have skipped an entire local date.
-    for offset in range(-2, 9):
+    # Cover skipped dates and two weeks of transitions: a spring gap can hide
+    # the only distinct target for one week, deferring it to the next week.
+    for offset in range(-2, 18):
         day = today + timedelta(days=offset)
         for block in days[WEEKDAYS[day.weekday()]].blocks:
             starts.append(BlockStart(block, resolve_start(day, block.start, zone)))
