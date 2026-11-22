@@ -270,11 +270,17 @@ uses its first occurrence.
     report with a foreign Context, or the retry check finding the target in place, releases them. Normal room
     triggers do not confirm an optimistic value. An equal target while still off cannot confirm a command
     that must restore supported heat mode.
-  - A matching foreign-Context report confirms that command and drops it and all older commands; retain
-    newer unconfirmed commands. Contexts are stored per command so late optimistic echoes of older commands
-    remain provisional too.
-  - A report equal to a value from before a still-pending command is stale/optimistic: ignore it. A real knob
-    turn back to that old value inside the retry window is indistinguishable and gets corrected by the retry.
+  - A matching foreign-Context report confirms a command only when its target or HVAC mode actually changes.
+    Attribute-only reports (for example, a new room temperature while HA still shows our optimistic target)
+    cannot confirm it. Confirmation drops that command and all older commands; retain newer unconfirmed
+    commands. A real report identical to the optimistic state emits no state-change event; the retry check
+    then confirms it. Contexts are stored per command so late optimistic echoes of older commands remain
+    provisional too.
+  - Each pending command records its previous target and HVAC mode. A report equal to a previous target, or
+    a transition back to a previous HVAC mode, is stale/optimistic: ignore it while that command is pending.
+    In particular, an optimistic heat restore followed by the device's old `off` report must retain the pending
+    command and its retry rather than start a user pause. A real knob turn back to that old value or mode
+    inside the retry window is indistinguishable and gets corrected by the retry.
   - Any other target change is a knob change. Round to 0.5 and clamp to 5–30. If it equals the room target
     without an override (profile in auto, away temperature in away), clear the override if one exists (no Store
     save when there is nothing to clear); otherwise create or

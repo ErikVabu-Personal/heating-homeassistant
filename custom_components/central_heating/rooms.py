@@ -24,6 +24,7 @@ class SentCommand:
     target: float
     at: datetime
     before: float | None
+    before_mode: str | None
     context_id: str
 
 
@@ -158,7 +159,16 @@ class RoomController:
             self._cancel_pending(trv)
             self._clear_problem(trv)
             return room.id
-        # Off is a user's deliberate pause until the next room trigger.
+        pending = self.pending.get(trv)
+        if pending is not None:
+            self._prune(pending)
+            if new.state != old.state and any(
+                command.before_mode == new.state for command in pending.commands
+            ):
+                # An optimistic heat restore can be followed by the device's old off mode.
+                # Preserve the pending heat command and retry instead of treating this as a pause.
+                return None
+        # A new off transition outside the pending stale window is a deliberate pause.
         if new.state == "off" and old.state != "off":
             self._cancel_pending(trv)
             return None
@@ -166,11 +176,11 @@ class RoomController:
         previous = available_temperature(old.attributes.get("temperature"))
         if target is None:
             return None
-        pending = self.pending.get(trv)
         if pending is not None:
-            self._prune(pending)
             matches = [i for i, command in enumerate(pending.commands) if command.target == target]
             if matches:
+                if target == previous and new.state == old.state:
+                    return None  # Unrelated attributes cannot confirm an optimistic setpoint.
                 if new.state == "off" and "heat" in (new.attributes.get("hvac_modes") or []):
                     return None  # Equal target alone cannot confirm a pending heat command.
                 if any(command.context_id == new.context.id for command in pending.commands):
@@ -288,7 +298,13 @@ class RoomController:
         self.last_commanded[trv] = (pending.target, now, pending.context)
         if not pending.commands or pending.commands[-1].target != pending.target:
             pending.commands.append(
-                SentCommand(pending.target, now, pending.observed, pending.context.id)
+                SentCommand(
+                    pending.target,
+                    now,
+                    pending.observed,
+                    state.state if state is not None else None,
+                    pending.context.id,
+                )
             )
         try:
             # HA schedules the handler; radio latency never holds either control lock.
