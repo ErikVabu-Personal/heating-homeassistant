@@ -29,190 +29,1538 @@ class HeatingClient {
         this.hass = hass;
         this.entryId = entryId;
     }
-    static async entries(hass) { return (await hass.callWS({ type: 'central_heating/get' })).entries; }
-    get() { return this.hass.callWS(this.message('get')); }
-    subscribe(callback) { return this.hass.connection.subscribeMessage(callback, this.message('subscribe')); }
-    write(command, fields = {}) { return this.hass.callWS(this.message(command, fields)); }
-    message(command, fields = {}) { return { ...fields, type: `central_heating/${command}`, config_entry_id: this.entryId }; }
+    static async entries(hass) {
+        return (await hass.callWS({ type: "central_heating/get" })).entries;
+    }
+    get() {
+        return this.hass.callWS(this.message("get"));
+    }
+    subscribe(callback) {
+        return this.hass.connection.subscribeMessage(callback, this.message("subscribe"));
+    }
+    write(command, fields = {}) {
+        return this.hass.callWS(this.message(command, fields));
+    }
+    message(command, fields = {}) {
+        return {
+            ...fields,
+            type: `central_heating/${command}`,
+            config_entry_id: this.entryId,
+        };
+    }
 }
 function overridePayload(roomId, temperature, duration, customMinutes) {
-    if (!Number.isFinite(temperature) || temperature < 5 || temperature > 30 || !Number.isInteger(temperature * 2))
-        throw new Error('Choose a target from 5 to 30 °C in 0.5° steps.');
-    const data = { room_id: roomId, temperature };
-    if (duration !== 'next_block') {
-        const minutes = duration === 'custom' ? customMinutes : Number(duration);
-        if (!minutes || !Number.isInteger(minutes) || minutes < 1 || minutes > 10080)
-            throw new Error('Choose 1 to 10080 minutes.');
+    if (!Number.isFinite(temperature) ||
+        temperature < 5 ||
+        temperature > 30 ||
+        !Number.isInteger(temperature * 2))
+        throw new Error("Choose a target from 5 to 30 °C in 0.5° steps.");
+    const data = {
+        room_id: roomId,
+        temperature,
+        kind: duration === "next_block" ? "next_block" : "duration",
+    };
+    if (duration !== "next_block") {
+        const minutes = duration === "custom" ? customMinutes : Number(duration);
+        if (!minutes ||
+            !Number.isInteger(minutes) ||
+            minutes < 1 ||
+            minutes > 10080)
+            throw new Error("Choose 1 to 10080 minutes.");
         data.minutes = minutes;
     }
     return data;
 }
 
-function temperature(value) { return value == null || !Number.isFinite(value) ? '—' : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)}°`; }
-function time(value) { return value ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '—'; }
-function localDateTime(value) { if (!value)
-    return ''; const d = new Date(value); const pad = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-function defaultProfile(name = 'Default profile') { return { name, days: Object.fromEntries(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(day => [day, [{ start: '00:00', target: 18 }]])) }; }
+function temperature(value) {
+    return value == null || !Number.isFinite(value)
+        ? "—"
+        : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)}°`;
+}
+function time(value, timeZone) {
+    return value
+        ? new Intl.DateTimeFormat(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone,
+        }).format(new Date(value))
+        : "—";
+}
+function localDateTime(value, timeZone) {
+    if (!value)
+        return "";
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+    })
+        .formatToParts(new Date(value))
+        .map((part) => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+function defaultProfile(name = "Default profile") {
+    return {
+        name,
+        days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+            day,
+            [{ start: "00:00", target: 18 }],
+        ])),
+    };
+}
 
 const styles = i$3 `
-:host{display:block;container-type:inline-size;color:var(--primary-text-color);font-family:var(--paper-font-body1_-_font-family,inherit);font-size:15px;line-height:1.5}*{box-sizing:border-box}[hidden]{display:none!important}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}ha-card{display:block;overflow:hidden;border:1px solid var(--divider-color);border-radius:var(--ha-card-border-radius,16px);background:var(--ha-card-background,var(--card-background-color))}header{padding:28px 28px 22px;display:flex;justify-content:space-between;gap:16px;align-items:center}.eyebrow{font-size:11px;letter-spacing:.14em;font-weight:700;text-transform:uppercase;color:var(--secondary-text-color)}h1{margin:4px 0;font-size:26px;line-height:1.2;letter-spacing:-.5px}h2{margin:0 0 16px;font-size:18px}h3{margin:0;font-size:16px}p{margin:6px 0 16px}.muted,small{color:var(--secondary-text-color)}small{font-size:12px}.badge{display:inline-flex;gap:6px;align-items:center;border-radius:20px;padding:5px 10px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--secondary-background-color)}.shadow,.warning{color:var(--warning-color);background:color-mix(in srgb,var(--warning-color) 12%,transparent)}.heat{color:var(--state-climate-heat-color,var(--warning-color))}.badge svg{width:14px;height:14px}svg{display:inline-block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle;flex-shrink:0}nav{display:flex;gap:4px;padding:0 20px;border-bottom:1px solid var(--divider-color)}nav button{border:0;border-radius:0;background:none;color:var(--secondary-text-color);padding:12px 16px;border-bottom:3px solid transparent;min-height:50px}nav button[aria-selected=true]{border-bottom-color:var(--primary-color);color:var(--primary-color);font-weight:700}main{padding:24px 28px 28px;min-height:380px}.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:20px}.panel{padding:22px;border:1px solid var(--divider-color);border-radius:12px}.boiler{background:var(--secondary-background-color)}.boiler-heading{display:flex;align-items:center;gap:14px;margin-bottom:28px}.flame{display:grid;place-items:center;width:50px;height:50px;border-radius:50%;color:var(--state-climate-heat-color,var(--warning-color));background:color-mix(in srgb,var(--warning-color) 12%,transparent)}.flame svg{width:28px;height:28px}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.metric strong{font-size:28px;font-weight:500;line-height:1.2;display:block}.metric small{display:block;margin-top:7px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 0 12px}.section-head h2{margin:0}.rooms{display:grid;gap:10px}.room{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px;border:1px solid var(--divider-color);border-radius:12px;width:100%;text-align:left;background:var(--ha-card-background,var(--card-background-color));color:var(--primary-text-color)}.room:hover{background:var(--secondary-background-color)}.room-name{display:flex;align-items:center;gap:10px;margin-bottom:5px}.room-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.room-temp{text-align:right;white-space:nowrap}.room-temp strong{font-size:26px;font-weight:500}.room-temp small{display:block}.empty{padding:32px;text-align:center;border:1px dashed var(--divider-color);border-radius:12px}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}.toolbar p{margin:0}.actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px}button,select,input{font:inherit}button{cursor:pointer;border:1px solid var(--divider-color);background:var(--secondary-background-color);color:var(--primary-text-color);border-radius:8px;padding:9px 15px;min-height:44px}button.primary{background:var(--primary-color);color:var(--text-primary-color);border-color:var(--primary-color)}button.danger{color:var(--error-color)}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary-color);outline-offset:3px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}.field:last-child{margin-bottom:0}label,.label{font-size:13px;font-weight:600}.hint{font-size:12px;color:var(--secondary-text-color)}input:not([type=checkbox]),select{width:100%;min-height:44px;padding:10px 12px;background:var(--ha-card-background,var(--card-background-color));color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:8px}input[type=checkbox]{width:20px;height:20px;accent-color:var(--primary-color)}.check{display:flex;align-items:center;gap:12px;min-height:44px;font-size:14px;font-weight:400}.entity-list{max-height:220px;overflow:auto;padding:8px 12px;border:1px solid var(--divider-color);border-radius:8px}.entity-list small{display:block}fieldset{border:0;margin:0;padding:0;min-width:0}legend{font-size:15px;font-weight:600;margin-bottom:14px}.setting-section+.setting-section{margin-top:24px;padding-top:24px;border-top:1px solid var(--divider-color)}.profile-row{padding:18px 0;border-bottom:1px solid var(--divider-color);display:flex;justify-content:space-between;gap:12px}.notice{padding:12px 28px;border-top:1px solid var(--divider-color);font-size:13px}.notice.error{color:var(--error-color);background:color-mix(in srgb,var(--error-color) 8%,transparent)}dialog{color:var(--primary-text-color);background:var(--ha-card-background,var(--card-background-color));border:1px solid var(--divider-color);border-radius:16px;width:min(480px,calc(100vw - 32px));padding:26px;max-height:90dvh;overflow:auto}dialog::backdrop{background:color-mix(in srgb,var(--primary-text-color) 40%,transparent)}.dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}.dialog-head h2{margin:0}.icon-button{padding:8px;display:grid;place-items:center;min-width:44px;background:none}.stepper{display:flex;justify-content:center;align-items:center;gap:28px;margin:24px 0}.stepper strong{font-size:42px;line-height:1}.stepper button{width:48px;font-size:24px}.split{display:flex;gap:8px;align-items:center}.wide{grid-column:1/-1}.delete-confirm{padding:18px;border:1px solid var(--error-color);border-radius:12px;margin-top:16px}
-@container(max-width:600px){header{padding:22px 18px 18px;align-items:flex-start;flex-wrap:wrap}h1{font-size:24px}nav{padding:0 8px;gap:0}nav button{flex:1;padding:12px 6px;font-size:13px}main{padding:18px}.grid,.form-grid{grid-template-columns:1fr}.panel{padding:18px}.boiler-heading{margin-bottom:20px}.metric strong{font-size:25px}.room{padding:16px 14px;gap:8px}.room-temp strong{font-size:23px}.room .badge{font-size:11px;padding:4px 8px}.toolbar{align-items:flex-start}.toolbar p{max-width:210px}.notice{padding:12px 18px}.actions{justify-content:stretch}.actions button{flex:1}.wide{grid-column:auto}}
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+  :host {
+    display: block;
+    container-type: inline-size;
+    color: var(--primary-text-color);
+    font-family: var(--paper-font-body1_-_font-family, inherit);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  [hidden] {
+    display: none !important;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  ha-card {
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--divider-color);
+    border-radius: var(--ha-card-border-radius, 16px);
+    background: var(--ha-card-background, var(--card-background-color));
+  }
+  header {
+    padding: 28px 28px 22px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+  }
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--secondary-text-color);
+  }
+  h1 {
+    margin: 4px 0;
+    font-size: 26px;
+    line-height: 1.2;
+    letter-spacing: -0.5px;
+  }
+  h2 {
+    margin: 0 0 16px;
+    font-size: 18px;
+  }
+  h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+  p {
+    margin: 6px 0 16px;
+  }
+  .muted,
+  small {
+    color: var(--secondary-text-color);
+  }
+  small {
+    font-size: 12px;
+  }
+  .badge {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    border-radius: 20px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    background: var(--secondary-background-color);
+  }
+  .shadow,
+  .warning {
+    color: var(--warning-color);
+    background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+  }
+  .heat {
+    color: var(--state-climate-heat-color, var(--warning-color));
+  }
+  .badge svg {
+    width: 14px;
+    height: 14px;
+  }
+  svg {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  nav {
+    display: flex;
+    gap: 4px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--divider-color);
+  }
+  nav button {
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--secondary-text-color);
+    padding: 12px 16px;
+    border-bottom: 3px solid transparent;
+    min-height: 50px;
+  }
+  nav button[aria-selected="true"] {
+    border-bottom-color: var(--primary-color);
+    color: var(--primary-color);
+    font-weight: 700;
+  }
+  main {
+    padding: 24px 28px 28px;
+    min-height: 380px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 20px;
+  }
+  .panel {
+    padding: 22px;
+    border: 1px solid var(--divider-color);
+    border-radius: 12px;
+  }
+  .boiler {
+    background: var(--secondary-background-color);
+  }
+  .boiler-heading {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  .flame {
+    display: grid;
+    place-items: center;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    color: var(--state-climate-heat-color, var(--warning-color));
+    background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+  }
+  .flame svg {
+    width: 28px;
+    height: 28px;
+  }
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .metric strong {
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.2;
+    display: block;
+  }
+  .metric small {
+    display: block;
+    margin-top: 7px;
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 24px 0 12px;
+  }
+  .section-head h2 {
+    margin: 0;
+  }
+  .rooms {
+    display: grid;
+    gap: 10px;
+  }
+  .room {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px;
+    border: 1px solid var(--divider-color);
+    border-radius: 12px;
+    width: 100%;
+    text-align: left;
+    background: var(--ha-card-background, var(--card-background-color));
+    color: var(--primary-text-color);
+  }
+  .room:hover {
+    background: var(--secondary-background-color);
+  }
+  .room-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+  }
+  .room-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .room-temp {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .room-temp strong {
+    font-size: 26px;
+    font-weight: 500;
+  }
+  .room-temp small {
+    display: block;
+  }
+  .empty {
+    padding: 32px;
+    text-align: center;
+    border: 1px dashed var(--divider-color);
+    border-radius: 12px;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .toolbar p {
+    margin: 0;
+  }
+  .actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+  button,
+  select,
+  input {
+    font: inherit;
+  }
+  button {
+    cursor: pointer;
+    border: 1px solid var(--divider-color);
+    background: var(--secondary-background-color);
+    color: var(--primary-text-color);
+    border-radius: 8px;
+    padding: 9px 15px;
+    min-height: 44px;
+  }
+  button.primary {
+    background: var(--primary-color);
+    color: var(--text-primary-color);
+    border-color: var(--primary-color);
+  }
+  button.danger {
+    color: var(--error-color);
+  }
+  button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 3px;
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .field:last-child {
+    margin-bottom: 0;
+  }
+  label,
+  .label {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+  }
+  input:not([type="checkbox"]),
+  select {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    background: var(--ha-card-background, var(--card-background-color));
+    color: var(--primary-text-color);
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+  }
+  input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--primary-color);
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 400;
+  }
+  .entity-list {
+    max-height: 220px;
+    overflow: auto;
+    padding: 8px 12px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+  }
+  .entity-list small {
+    display: block;
+  }
+  fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+  }
+  legend {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .setting-section + .setting-section {
+    margin-top: 24px;
+    padding-top: 24px;
+    border-top: 1px solid var(--divider-color);
+  }
+  .profile-row {
+    padding: 18px 0;
+    border-bottom: 1px solid var(--divider-color);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .notice {
+    padding: 12px 28px;
+    border-top: 1px solid var(--divider-color);
+    font-size: 13px;
+  }
+  .notice.error {
+    color: var(--error-color);
+    background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  }
+  dialog {
+    color: var(--primary-text-color);
+    background: var(--ha-card-background, var(--card-background-color));
+    border: 1px solid var(--divider-color);
+    border-radius: 16px;
+    width: min(480px, calc(100vw - 32px));
+    padding: 26px;
+    max-height: 90dvh;
+    overflow: auto;
+  }
+  dialog::backdrop {
+    background: color-mix(in srgb, var(--primary-text-color) 40%, transparent);
+  }
+  .dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .dialog-head h2 {
+    margin: 0;
+  }
+  .icon-button {
+    padding: 8px;
+    display: grid;
+    place-items: center;
+    min-width: 44px;
+    background: none;
+  }
+  .stepper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 28px;
+    margin: 24px 0;
+  }
+  .stepper strong {
+    font-size: 42px;
+    line-height: 1;
+  }
+  .stepper button {
+    width: 48px;
+    font-size: 24px;
+  }
+  .split {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .wide {
+    grid-column: 1/-1;
+  }
+  .delete-confirm {
+    padding: 18px;
+    border: 1px solid var(--error-color);
+    border-radius: 12px;
+    margin-top: 16px;
+  }
+  @container (max-width:600px) {
+    header {
+      padding: 22px 18px 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    h1 {
+      font-size: 24px;
+    }
+    nav {
+      padding: 0 8px;
+      gap: 0;
+    }
+    nav button {
+      flex: 1;
+      padding: 12px 6px;
+      font-size: 13px;
+    }
+    main {
+      padding: 18px;
+    }
+    .grid,
+    .form-grid {
+      grid-template-columns: 1fr;
+    }
+    .panel {
+      padding: 18px;
+    }
+    .boiler-heading {
+      margin-bottom: 20px;
+    }
+    .metric strong {
+      font-size: 25px;
+    }
+    .room {
+      padding: 16px 14px;
+      gap: 8px;
+    }
+    .room-temp strong {
+      font-size: 23px;
+    }
+    .room .badge {
+      font-size: 11px;
+      padding: 4px 8px;
+    }
+    .toolbar {
+      align-items: flex-start;
+    }
+    .toolbar p {
+      max-width: 210px;
+    }
+    .notice {
+      padding: 12px 18px;
+    }
+    .actions {
+      justify-content: stretch;
+    }
+    .actions button {
+      flex: 1;
+    }
+    .wide {
+      grid-column: auto;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      scroll-behavior: auto;
+    }
+  }
 `;
 
-const tabs = ['Overview', 'Rooms', 'Schedules', 'Settings'];
+const tabs = ["Overview", "Rooms", "Schedules", "Settings"];
 const flame = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3c1 5-4 5-2 9 1-1 2-2 3-3 3 3 5 5 4 8a6 6 0 0 1-12-1c0-4 3-6 4-8 0 3 1 3 2 4"/></svg>`;
 const shield = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg>`;
 const close = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>`;
 class CentralHeatingCard extends i {
     constructor() {
         super(...arguments);
-        this.tab = 'Overview';
+        this.tab = "Overview";
         this.busy = false;
-        this.error = '';
-        this.notice = '';
+        this.error = "";
+        this.notice = "";
         this.editing = null;
-        this.filter = '';
+        this.filter = "";
         this.quickRoom = null;
         this.quickTarget = 21;
-        this.duration = 'next_block';
+        this.duration = "next_block";
         this.deleting = null;
-        this.config = { type: 'custom:central-heating-card' };
+        this.config = { type: "custom:central-heating-card" };
         this.generation = 0;
         this.connecting = false;
         this.entries = [];
-        this.saveMode = async (event) => { event.preventDefault(); const data = new FormData(event.target); const mode = String(data.get('mode')); const until = mode === 'away' && data.get('until') ? String(data.get('until')) : null; await this.write('mode/set', { mode, until }, 'Heating mode saved.'); };
-        this.saveRoom = async (event) => { event.preventDefault(); if (!this.editing || !this.status)
-            return; const form = new FormData(event.target); const trvs = form.getAll('trvs').map(String); if (!trvs.length) {
-            this.error = 'Choose at least one thermostat.';
-            return;
-        } let profileId = String(form.get('profile_id')); if (!profileId) {
-            if (!await this.write('profile/save', { profile: defaultProfile() }, 'Default profile created.'))
+        this.saveMode = async (event) => {
+            event.preventDefault();
+            const data = new FormData(event.target);
+            const mode = String(data.get("mode"));
+            const until = mode === "away" && data.get("until") ? String(data.get("until")) : null;
+            await this.write("mode/set", { mode, until }, "Heating mode saved.");
+        };
+        this.saveRoom = async (event) => {
+            event.preventDefault();
+            if (!this.editing || !this.status)
                 return;
-            profileId = this.status.saved_id ?? '';
-        } if (!profileId) {
-            this.error = 'A heating profile is required.';
-            return;
-        } const room = { ...(this.editing.id ? { id: this.editing.id } : {}), name: String(form.get('name')).trim(), trvs, profile_id: profileId, area_id: String(form.get('area_id') ?? '') || null, enabled: form.has('enabled') }; if (await this.write('room/save', { room }, 'Room saved.'))
-            this.editing = null; };
-        this.saveSettings = async (event) => { event.preventDefault(); const data = new FormData(event.target); const settings = { frost_temperature: Number(data.get('frost_temperature')), hysteresis: Number(data.get('hysteresis')), away_temperature: Number(data.get('away_temperature')), override_default: String(data.get('override_default')), override_minutes: Number(data.get('override_minutes')), retry_seconds: Number(data.get('retry_seconds')), sync_rooms_on_knob_change: data.has('sync_rooms_on_knob_change') }; await this.write('settings/save', { settings, shadow: data.has('shadow') }, 'Heating settings saved.'); };
+            const form = new FormData(event.target);
+            const name = String(form.get("name")).trim();
+            if (!name) {
+                this.error = "Enter a room name.";
+                return;
+            }
+            const trvs = form.getAll("trvs").map(String);
+            if (!trvs.length) {
+                this.error = "Choose at least one thermostat.";
+                return;
+            }
+            let profileId = String(form.get("profile_id"));
+            if (!profileId) {
+                if (!(await this.write("profile/save", { profile: defaultProfile() }, "Default profile created.")))
+                    return;
+                profileId = this.status.saved_id ?? "";
+            }
+            if (!profileId) {
+                this.error = "A heating profile is required.";
+                return;
+            }
+            const room = {
+                ...(this.editing.id ? { id: this.editing.id } : {}),
+                name,
+                trvs,
+                profile_id: profileId,
+                area_id: String(form.get("area_id") ?? "") || null,
+                enabled: form.has("enabled"),
+            };
+            if (await this.write("room/save", { room }, "Room saved."))
+                this.editing = null;
+        };
+        this.saveSettings = async (event) => {
+            event.preventDefault();
+            const data = new FormData(event.target);
+            const settings = {
+                frost_temperature: Number(data.get("frost_temperature")),
+                hysteresis: Number(data.get("hysteresis")),
+                away_temperature: Number(data.get("away_temperature")),
+                override_default: String(data.get("override_default")),
+                override_minutes: Number(data.get("override_minutes")),
+                retry_seconds: Number(data.get("retry_seconds")),
+                sync_rooms_on_knob_change: data.has("sync_rooms_on_knob_change"),
+            };
+            await this.write("settings/save", { settings, shadow: data.has("shadow") }, "Heating settings saved.");
+        };
     }
     static { this.styles = styles; }
-    static { this.properties = { status: { state: true }, tab: { state: true }, busy: { state: true }, error: { state: true }, notice: { state: true }, editing: { state: true }, filter: { state: true }, quickRoom: { state: true }, quickTarget: { state: true }, duration: { state: true }, deleting: { state: true } }; }
-    set hass(value) { if (!value) {
-        this.disconnect();
-        this._hass = undefined;
-        return;
-    } const changed = this._hass?.connection !== value.connection; this._hass = value; this.requestUpdate(); if (changed || !this.client)
-        void this.connect(); }
-    get hass() { return this._hass; }
-    setConfig(value) { if (!value || value.type !== 'custom:central-heating-card')
-        throw new Error('Invalid Central Heating card configuration'); const changed = this.config.config_entry_id !== value.config_entry_id; this.config = { ...value }; if (changed) {
-        this.disconnect();
-        this.status = undefined;
-    } this.requestUpdate(); void this.connect(); }
-    connectedCallback() { super.connectedCallback(); void this.connect(); }
-    disconnectedCallback() { super.disconnectedCallback(); this.disconnect(); }
-    disconnect() { this.generation++; this.unsubscribe?.(); this.unsubscribe = undefined; this.client = undefined; this.connecting = false; }
-    async connect() { if (!this._hass || !this.isConnected || this.connecting || this.client)
-        return; this.connecting = true; const generation = this.generation; try {
-        this.entries = await HeatingClient.entries(this._hass);
-        const id = this.config.config_entry_id ?? (this.entries.length === 1 ? this.entries[0].entry_id : undefined);
-        if (!id) {
-            this.error = this.entries.length ? 'Choose a heating instance in the card editor.' : 'Add a Central Heating integration to get started.';
+    static { this.properties = {
+        status: { state: true },
+        tab: { state: true },
+        busy: { state: true },
+        error: { state: true },
+        notice: { state: true },
+        editing: { state: true },
+        filter: { state: true },
+        quickRoom: { state: true },
+        quickTarget: { state: true },
+        duration: { state: true },
+        deleting: { state: true },
+    }; }
+    set hass(value) {
+        if (!value) {
+            this.disconnect();
+            this._hass = undefined;
             return;
         }
-        const client = new HeatingClient(this._hass, id);
-        const status = await client.get();
-        if (generation !== this.generation)
-            return;
-        this.client = client;
-        this.status = status;
-        const unsub = await client.subscribe(value => { if (generation === this.generation) {
-            this.status = value;
-            this.error = '';
-        } });
-        if (generation === this.generation)
-            this.unsubscribe = unsub;
-        else
-            unsub();
+        const changed = this._hass?.connection !== value.connection;
+        if (changed)
+            this.disconnect();
+        this._hass = value;
+        this.requestUpdate();
+        if (changed || !this.client)
+            void this.connect();
     }
-    catch (error) {
-        if (generation === this.generation)
-            this.error = this.message(error);
+    get hass() {
+        return this._hass;
     }
-    finally {
-        if (generation === this.generation)
-            this.connecting = false;
-    } }
-    message(error) { return error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : 'Unable to save. Please try again.'; }
-    get writable() { return this._hass?.user?.is_admin === true; }
-    async write(command, fields, success) { if (!this.client || this.busy)
-        return false; this.busy = true; this.error = ''; this.notice = ''; try {
-        this.status = await this.client.write(command, fields);
-        this.notice = success;
-        return true;
+    setConfig(value) {
+        if (!value || value.type !== "custom:central-heating-card")
+            throw new Error("Invalid Central Heating card configuration");
+        const changed = this.config.config_entry_id !== value.config_entry_id;
+        this.config = { ...value };
+        if (changed) {
+            this.disconnect();
+            this.status = undefined;
+        }
+        this.requestUpdate();
+        void this.connect();
     }
-    catch (error) {
-        this.error = this.message(error);
-        return false;
+    connectedCallback() {
+        super.connectedCallback();
+        void this.connect();
     }
-    finally {
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        this.disconnect();
+    }
+    disconnect() {
+        this.generation++;
+        this.unsubscribe?.();
+        this.unsubscribe = undefined;
+        this.client = undefined;
+        this.connecting = false;
         this.busy = false;
-    } }
-    getCardSize() { return 7; }
-    static getConfigElement() { return document.createElement('central-heating-card-editor'); }
-    static getStubConfig() { return { type: 'custom:central-heating-card' }; }
-    render() { const s = this.status; return b `<ha-card><header><div><div class="eyebrow">Climate control</div><h1>${this.config.title ?? 'Central Heating'}</h1><small>${s ? `${Object.keys(s.rooms).length} rooms · ${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)}` : 'Your rooms, one comfortable home'}</small></div>${s?.configuration.shadow ? b `<span class="badge shadow">${shield} Shadow mode</span>` : A}</header><nav role="tablist" aria-label="Heating views">${tabs.map(tab => b `<button role="tab" id=${`tab-${tab}`} aria-selected=${this.tab === tab} aria-controls="view" @click=${() => { this.tab = tab; this.editing = null; this.deleting = null; }}>${tab}</button>`)}</nav><main id="view" role="tabpanel" aria-labelledby=${`tab-${this.tab}`}>${s ? this.tab === 'Overview' ? this.overview(s) : this.tab === 'Rooms' ? this.rooms(s) : this.tab === 'Settings' ? this.settings(s) : this.schedules(s) : b `<p class="muted">${this.error ? 'Heating information is unavailable.' : 'Connecting to Central Heating…'}</p>`}</main>${this.error ? b `<div class="notice error" role="alert">${this.error}</div>` : A}${this.notice ? b `<div class="notice" role="status">${this.notice}</div>` : A}${!this.writable && s ? b `<div class="notice muted">Read-only access. An administrator can change heating settings.</div>` : A}${this.quickDialog(s)}</ha-card>`; }
-    overview(s) { return b `<div class="grid"><section class="panel boiler" aria-label="Boiler status"><div class="boiler-heading"><span class="flame">${flame}</span><div><h3>${s.global.command.heat ? 'Calling for heat' : 'Boiler resting'}</h3><small>${s.configuration.shadow ? 'Shadow mode · boiler output paused' : 'Following room demand'}</small></div></div><div class="metrics"><div class="metric"><strong>${s.global.demand_count}</strong><small>Demanding TRVs</small></div><div class="metric"><strong>${temperature(s.global.virtual_temp)}</strong><small>Virtual temperature</small></div><div class="metric"><strong>${temperature(s.global.virtual_setpoint)}</strong><small>Virtual setpoint</small></div></div></section><section class="panel"><h2>Heating mode</h2><form @submit=${this.saveMode}><fieldset ?disabled=${!this.writable || this.busy}><div class="field"><label for="mode">Mode</label><select id="mode" name="mode" @change=${(e) => { const form = e.target.form; const field = form.querySelector('[data-until]'); field.hidden = e.target.value !== 'away'; }}>${['auto', 'away', 'summer', 'manual'].map(mode => b `<option value=${mode} ?selected=${s.configuration.mode.value === mode}>${mode[0].toUpperCase() + mode.slice(1)}</option>`)}</select></div><div class="field" data-until ?hidden=${s.configuration.mode.value !== 'away'}><label for="until">Away until (optional)</label><input id="until" name="until" type="datetime-local" .value=${localDateTime(s.configuration.mode.until)}><small>Home Assistant’s local time.</small></div><button class="primary" type="submit">${this.busy ? 'Saving…' : 'Apply mode'}</button></fieldset></form></section></div><div class="section-head"><h2>Room comfort</h2><small>Tap a room to adjust</small></div><div class="rooms">${Object.entries(s.rooms).map(([id, room]) => b `<button class="room" @click=${() => this.openQuick(id)} aria-label=${`Adjust ${room.name}`}><div><div class="room-name">${room.demanding ? b `<span class="heat">${flame}</span>` : A}<h3>${room.name}</h3></div><small>${room.demanding ? 'Calling for heat' : 'Comfort on schedule'}</small><div class="room-tags">${room.override_until ? b `<span class="badge">${temperature(s.configuration.overrides[id]?.target)} until ${time(room.override_until)}</span>` : A}${room.sync_problem ? b `<span class="badge warning">Check thermostat sync</span>` : A}</div></div><div class="room-temp"><strong>${temperature(room.current)}</strong><small>Target ${temperature(room.desired)}</small></div></button>`)}</div>${!Object.keys(s.rooms).length ? b `<div class="empty"><h3>No rooms yet</h3><p class="muted">Add your first room to bring your thermostats together.</p><button @click=${() => { this.tab = 'Rooms'; }}>Set up rooms</button></div>` : A}`; }
-    async openQuick(id) { const room = this.status?.rooms[id]; if (!room)
-        return; this.quickRoom = id; this.quickTarget = room.desired ?? 21; this.duration = 'next_block'; await this.updateComplete; this.renderRoot.querySelector('#quick-dialog')?.showModal(); }
-    closeQuick() { this.renderRoot.querySelector('#quick-dialog')?.close(); this.quickRoom = null; }
-    quickDialog(s) { if (!this.quickRoom || !s)
-        return A; const id = this.quickRoom; return b `<dialog id="quick-dialog" @close=${() => { this.quickRoom = null; }} @cancel=${() => { this.quickRoom = null; }}><div class="dialog-head"><div><h2>${s.rooms[id]?.name}</h2><small>Temporary room target</small></div><button class="icon-button" aria-label="Close room adjustment" @click=${() => this.closeQuick()}>${close}</button></div><form @submit=${async (e) => { e.preventDefault(); try {
-        const data = new FormData(e.target);
-        if (await this.write('override/set', overridePayload(id, this.quickTarget, this.duration, Number(data.get('minutes'))), 'Room override saved.'))
-            this.closeQuick();
     }
-    catch (error) {
-        this.error = this.message(error);
-    } }}><fieldset ?disabled=${!this.writable || this.busy}><div class="stepper"><button type="button" aria-label="Decrease target by half a degree" ?disabled=${this.quickTarget <= 5} @click=${() => { this.quickTarget = Math.max(5, this.quickTarget - .5); }}>−</button><strong aria-live="polite">${temperature(this.quickTarget)}</strong><button type="button" aria-label="Increase target by half a degree" ?disabled=${this.quickTarget >= 30} @click=${() => { this.quickTarget = Math.min(30, this.quickTarget + .5); }}>+</button></div><div class="field"><label for="duration">Keep this target</label><select id="duration" .value=${this.duration} @change=${(e) => { this.duration = e.target.value; }}><option value="next_block">Until the next change</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="180">3 hours</option><option value="custom">Custom length</option></select></div>${this.duration === 'custom' ? b `<div class="field"><label for="minutes">Minutes</label><input id="minutes" name="minutes" type="number" min="1" max="10080" step="1" value="120" required></div>` : A}<div class="actions"><button type="button" @click=${async () => { if (await this.write('override/clear', { room_id: id }, 'Room returned to schedule.'))
-        this.closeQuick(); }}>Back to schedule</button><button class="primary" type="submit">${this.busy ? 'Saving…' : 'Apply target'}</button></div></fieldset></form>${this.error ? b `<p role="alert">${this.error}</p>` : A}</dialog>`; }
-    rooms(s) { return b `<div class="toolbar"><div><h2>Rooms & thermostats</h2><p class="muted">Group thermostats that share a target.</p></div><button class="primary" ?disabled=${!this.writable || this.busy} @click=${() => this.editRoom()}>Add room</button></div>${this.editing ? this.roomForm(s) : b `<div class="rooms">${Object.entries(s.configuration.rooms).map(([id, room]) => b `<div class="room"><div><h3>${room.name}</h3><small>${room.trvs.length} thermostat${room.trvs.length === 1 ? '' : 's'} · ${s.configuration.profiles[room.profile_id]?.name ?? 'No profile'}${room.enabled ? '' : ' · Disabled'}</small><div class="room-tags">${room.trvs.map(trv => b `<span class="badge">${String(this.hass?.states[trv]?.attributes.friendly_name ?? trv)}</span>`)}</div></div><button ?disabled=${!this.writable} @click=${() => this.editRoom(id)}>Edit<span class="sr-only"> ${room.name}</span></button></div>`)}</div>${!Object.keys(s.configuration.rooms).length ? b `<div class="empty">No rooms have been configured.</div>` : A}`}`; }
-    editRoom(id) { const room = id ? this.status?.configuration.rooms[id] : undefined; this.editing = { id, room: room ? { ...room, trvs: [...room.trvs] } : { name: '', trvs: [], profile_id: Object.keys(this.status?.configuration.profiles ?? {})[0] ?? '', area_id: null, enabled: true } }; this.filter = ''; this.deleting = null; }
-    roomForm(s) { const draft = this.editing; const used = new Set(Object.entries(s.configuration.rooms).filter(([id]) => id !== draft.id).flatMap(([, room]) => room.trvs)); const entities = Object.entries(this.hass?.states ?? {}).filter(([id]) => id.startsWith('climate.') && !used.has(id) && !Object.keys(s.configuration.rooms).some(roomId => id.endsWith(`_room_${roomId}`))); const profiles = Object.entries(s.configuration.profiles); return b `<form class="panel" @submit=${this.saveRoom}><h2>${draft.id ? 'Edit room' : 'Add a room'}</h2><fieldset ?disabled=${this.busy || !this.writable}><div class="form-grid"><div class="field"><label for="room-name">Room name</label><input id="room-name" name="name" required maxlength="120" .value=${draft.room.name}></div><div class="field"><label for="room-profile">Heating profile</label><select id="room-profile" name="profile_id" .value=${draft.room.profile_id}>${profiles.length ? profiles.map(([id, p]) => b `<option value=${id}>${p.name}</option>`) : b `<option value="">Create default · 18° all week</option>`}</select>${!profiles.length ? b `<small>A simple 00:00 → 18° profile will be created when you save.</small>` : A}</div><div class="field wide"><label for="trv-filter">Radiator thermostats</label><input id="trv-filter" type="search" placeholder="Find a climate entity" .value=${this.filter} @input=${(e) => { this.filter = e.target.value; }}><div class="entity-list">${entities.map(([id, state]) => b `<label class="check" ?hidden=${!`${id} ${state.attributes.friendly_name ?? ''}`.toLowerCase().includes(this.filter.toLowerCase())}><input type="checkbox" name="trvs" value=${id} .checked=${draft.room.trvs.includes(id)}><span>${String(state.attributes.friendly_name ?? id)}<small>${id}</small></span></label>`)}</div><small>Climate entities already assigned to another room are excluded.</small></div><div class="field"><label for="area">Area (optional)</label><input id="area" name="area_id" list="areas" .value=${draft.room.area_id ?? ''} placeholder="No area"><datalist id="areas">${Object.entries(this.hass?.areas ?? {}).map(([id, area]) => b `<option value=${id}>${area.name}</option>`)}</datalist></div><div class="field"><span class="label">Room control</span><label class="check"><input type="checkbox" name="enabled" .checked=${draft.room.enabled}>Enabled</label></div></div><div class="actions">${draft.id ? b `<button class="danger" type="button" @click=${() => { this.deleting = draft.id ?? null; }}>Delete room</button>` : A}<button type="button" @click=${() => { this.editing = null; this.deleting = null; }}>Cancel</button><button class="primary" type="submit">${this.busy ? 'Saving…' : 'Save room'}</button></div></fieldset>${this.deleting ? b `<div class="delete-confirm" role="alert"><p>Delete ${draft.room.name}? Its thermostats will no longer be scheduled by this room.</p><div class="actions"><button type="button" @click=${() => { this.deleting = null; }}>Keep room</button><button type="button" class="danger" @click=${async () => { if (await this.write('room/delete', { room_id: draft.id }, 'Room deleted.')) {
-        this.editing = null;
+    async connect() {
+        if (!this._hass || !this.isConnected || this.connecting || this.client)
+            return;
+        this.connecting = true;
+        const generation = this.generation;
+        try {
+            this.entries = await HeatingClient.entries(this._hass);
+            const id = this.config.config_entry_id ??
+                (this.entries.length === 1 ? this.entries[0].entry_id : undefined);
+            if (!id) {
+                this.error = this.entries.length
+                    ? "Choose a heating instance in the card editor."
+                    : "Add a Central Heating integration to get started.";
+                return;
+            }
+            const client = new HeatingClient(this._hass, id);
+            const status = await client.get();
+            if (generation !== this.generation)
+                return;
+            this.client = client;
+            this.status = status;
+            const unsub = await client.subscribe((value) => {
+                if (generation === this.generation) {
+                    this.status = value;
+                    this.error = "";
+                }
+            });
+            if (generation === this.generation)
+                this.unsubscribe = unsub;
+            else
+                unsub();
+        }
+        catch (error) {
+            if (generation === this.generation) {
+                this.client = undefined;
+                this.error = this.message(error);
+            }
+        }
+        finally {
+            if (generation === this.generation)
+                this.connecting = false;
+        }
+    }
+    message(error) {
+        return error instanceof Error
+            ? error.message
+            : typeof error === "object" && error !== null && "message" in error
+                ? String(error.message)
+                : "Unable to save. Please try again.";
+    }
+    get writable() {
+        return this._hass?.user?.is_admin === true;
+    }
+    async write(command, fields, success) {
+        if (!this.client || this.busy)
+            return false;
+        const generation = this.generation;
+        const client = this.client;
+        this.busy = true;
+        this.error = "";
+        this.notice = "";
+        try {
+            const status = await client.write(command, fields);
+            if (generation !== this.generation || client !== this.client)
+                return false;
+            this.status = status;
+            this.notice = success;
+            return true;
+        }
+        catch (error) {
+            if (generation === this.generation)
+                this.error = this.message(error);
+            return false;
+        }
+        finally {
+            if (generation === this.generation)
+                this.busy = false;
+        }
+    }
+    getCardSize() {
+        return 7;
+    }
+    static getConfigElement() {
+        return document.createElement("central-heating-card-editor");
+    }
+    static getStubConfig() {
+        return { type: "custom:central-heating-card" };
+    }
+    render() {
+        const s = this.status;
+        return b `<ha-card
+      ><header>
+        <div>
+          <div class="eyebrow">Climate control</div>
+          <h1>${this.config.title ?? "Central Heating"}</h1>
+          <small
+            >${s
+            ? `${Object.keys(s.rooms).length} rooms · ${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)}`
+            : "Your rooms, one comfortable home"}</small
+          >
+        </div>
+        ${s?.configuration.shadow
+            ? b `<span class="badge shadow">${shield} Shadow mode</span>`
+            : A}
+      </header>
+      <nav role="tablist" aria-label="Heating views">
+        ${tabs.map((tab) => b `<button
+              role="tab"
+              id=${`tab-${tab}`}
+              aria-selected=${this.tab === tab}
+              aria-controls="view"
+              @click=${() => {
+            this.tab = tab;
+            this.editing = null;
+            this.deleting = null;
+        }}
+            >
+              ${tab}
+            </button>`)}
+      </nav>
+      <main id="view" role="tabpanel" aria-labelledby=${`tab-${this.tab}`}>
+        ${s
+            ? this.tab === "Overview"
+                ? this.overview(s)
+                : this.tab === "Rooms"
+                    ? this.rooms(s)
+                    : this.tab === "Settings"
+                        ? this.settings(s)
+                        : this.schedules(s)
+            : b `<p class="muted">
+              ${this.error
+                ? "Heating information is unavailable."
+                : "Connecting to Central Heating…"}
+            </p>`}
+      </main>
+      ${this.error
+            ? b `<div class="notice error" role="alert">${this.error}</div>`
+            : A}${this.notice
+            ? b `<div class="notice" role="status">${this.notice}</div>`
+            : A}${!this.writable && s
+            ? b `<div class="notice muted">
+            Read-only access. An administrator can change heating settings.
+          </div>`
+            : A}${this.quickDialog(s)}</ha-card
+    >`;
+    }
+    overview(s) {
+        return b `<div class="grid">
+        <section class="panel boiler" aria-label="Boiler status">
+          <div class="boiler-heading">
+            <span class="flame">${flame}</span>
+            <div>
+              <h3>
+                ${s.global.command.heat ? "Calling for heat" : "Boiler resting"}
+              </h3>
+              <small
+                >${s.configuration.shadow
+            ? "Shadow mode · boiler output paused"
+            : "Following room demand"}</small
+              >
+            </div>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <strong>${s.global.demand_count}</strong
+              ><small>Demanding TRVs</small>
+            </div>
+            <div class="metric">
+              <strong>${temperature(s.global.virtual_temp)}</strong
+              ><small>Virtual temperature</small>
+            </div>
+            <div class="metric">
+              <strong>${temperature(s.global.virtual_setpoint)}</strong
+              ><small>Virtual setpoint</small>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Heating mode</h2>
+          <form @submit=${this.saveMode}>
+            <fieldset ?disabled=${!this.writable || this.busy}>
+              <div class="field">
+                <label for="mode">Mode</label
+                ><select
+                  id="mode"
+                  name="mode"
+                  @change=${(e) => {
+            const form = e.target.form;
+            const field = form.querySelector("[data-until]");
+            field.hidden =
+                e.target.value !== "away";
+        }}
+                >
+                  ${["auto", "away", "summer", "manual"].map((mode) => b `<option
+                        value=${mode}
+                        ?selected=${s.configuration.mode.value === mode}
+                      >
+                        ${mode[0].toUpperCase() + mode.slice(1)}
+                      </option>`)}
+                </select>
+              </div>
+              <div
+                class="field"
+                data-until
+                ?hidden=${s.configuration.mode.value !== "away"}
+              >
+                <label for="until">Away until (optional)</label
+                ><input
+                  id="until"
+                  name="until"
+                  type="datetime-local"
+                  .value=${localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone)}
+                /><small>Home Assistant’s local time.</small>
+              </div>
+              <button class="primary" type="submit">
+                ${this.busy ? "Saving…" : "Apply mode"}
+              </button>
+            </fieldset>
+          </form>
+        </section>
+      </div>
+      <div class="section-head">
+        <h2>Room comfort</h2>
+        <small>Tap a room to adjust</small>
+      </div>
+      <div class="rooms">
+        ${Object.entries(s.rooms).map(([id, room]) => b `<button
+              class="room"
+              @click=${() => this.openQuick(id)}
+              aria-label=${`Adjust ${room.name}`}
+            >
+              <div>
+                <div class="room-name">
+                  ${room.demanding
+            ? b `<span class="heat">${flame}</span>`
+            : A}
+                  <h3>${room.name}</h3>
+                </div>
+                <small
+                  >${room.demanding
+            ? "Calling for heat"
+            : s.configuration.mode.value === "manual"
+                ? "Thermostat controlled"
+                : "Comfort on schedule"}</small
+                >
+                <div class="room-tags">
+                  ${room.override_until
+            ? b `<span class="badge"
+                        >${temperature(s.configuration.overrides[id]?.target)}
+                        until
+                        ${time(room.override_until, this.hass?.config?.time_zone)}</span
+                      >`
+            : A}${room.sync_problem
+            ? b `<span class="badge warning"
+                        >Check thermostat sync</span
+                      >`
+            : A}
+                </div>
+              </div>
+              <div class="room-temp">
+                <strong>${temperature(room.current)}</strong
+                ><small
+                  >Target ${temperature(room.desired ?? room.target)}</small
+                >
+              </div>
+            </button>`)}
+      </div>
+      ${!Object.keys(s.rooms).length
+            ? b `<div class="empty">
+            <h3>No rooms yet</h3>
+            <p class="muted">
+              Add your first room to bring your thermostats together.
+            </p>
+            <button
+              @click=${() => {
+                this.tab = "Rooms";
+            }}
+            >
+              Set up rooms
+            </button>
+          </div>`
+            : A}`;
+    }
+    async openQuick(id) {
+        const room = this.status?.rooms[id];
+        if (!room)
+            return;
+        this.quickRoom = id;
+        this.quickTarget = room.desired ?? room.target ?? 21;
+        this.duration = "next_block";
+        await this.updateComplete;
+        this.renderRoot
+            .querySelector("#quick-dialog")
+            ?.showModal();
+    }
+    closeQuick() {
+        this.renderRoot.querySelector("#quick-dialog")?.close();
+        this.quickRoom = null;
+    }
+    quickDialog(s) {
+        if (!this.quickRoom || !s)
+            return A;
+        const id = this.quickRoom;
+        return b `<dialog
+      id="quick-dialog"
+      @close=${() => {
+            this.quickRoom = null;
+        }}
+      @cancel=${() => {
+            this.quickRoom = null;
+        }}
+    >
+      <div class="dialog-head">
+        <div>
+          <h2>${s.rooms[id]?.name}</h2>
+          <small>Temporary room target</small>
+        </div>
+        <button
+          class="icon-button"
+          aria-label="Close room adjustment"
+          @click=${() => this.closeQuick()}
+        >
+          ${close}
+        </button>
+      </div>
+      <form
+        @submit=${async (e) => {
+            e.preventDefault();
+            try {
+                const data = new FormData(e.target);
+                if (await this.write("override/set", overridePayload(id, this.quickTarget, this.duration, Number(data.get("minutes"))), "Room override saved."))
+                    this.closeQuick();
+            }
+            catch (error) {
+                this.error = this.message(error);
+            }
+        }}
+      >
+        <fieldset ?disabled=${!this.writable || this.busy}>
+          <div class="stepper">
+            <button
+              type="button"
+              aria-label="Decrease target by half a degree"
+              ?disabled=${this.quickTarget <= 5}
+              @click=${() => {
+            this.quickTarget = Math.max(5, this.quickTarget - 0.5);
+        }}
+            >
+              −</button
+            ><strong aria-live="polite">${temperature(this.quickTarget)}</strong
+            ><button
+              type="button"
+              aria-label="Increase target by half a degree"
+              ?disabled=${this.quickTarget >= 30}
+              @click=${() => {
+            this.quickTarget = Math.min(30, this.quickTarget + 0.5);
+        }}
+            >
+              +
+            </button>
+          </div>
+          <div class="field">
+            <label for="duration">Keep this target</label
+            ><select
+              id="duration"
+              .value=${this.duration}
+              @change=${(e) => {
+            this.duration = e.target.value;
+        }}
+            >
+              <option value="next_block">Until the next change</option>
+              <option value="60">1 hour</option>
+              <option value="120">2 hours</option>
+              <option value="180">3 hours</option>
+              <option value="custom">Custom length</option>
+            </select>
+          </div>
+          ${this.duration === "custom"
+            ? b `<div class="field">
+                <label for="minutes">Minutes</label
+                ><input
+                  id="minutes"
+                  name="minutes"
+                  type="number"
+                  min="1"
+                  max="10080"
+                  step="1"
+                  value="120"
+                  required
+                />
+              </div>`
+            : A}
+          <div class="actions">
+            <button
+              type="button"
+              @click=${async () => {
+            if (await this.write("override/clear", { room_id: id }, "Room returned to schedule."))
+                this.closeQuick();
+        }}
+            >
+              Back to schedule</button
+            ><button class="primary" type="submit">
+              ${this.busy ? "Saving…" : "Apply target"}
+            </button>
+          </div>
+        </fieldset>
+      </form>
+      ${this.error ? b `<p role="alert">${this.error}</p>` : A}
+    </dialog>`;
+    }
+    rooms(s) {
+        return b `<div class="toolbar">
+        <div>
+          <h2>Rooms & thermostats</h2>
+          <p class="muted">Group thermostats that share a target.</p>
+        </div>
+        <button
+          class="primary"
+          ?disabled=${!this.writable || this.busy}
+          @click=${() => this.editRoom()}
+        >
+          Add room
+        </button>
+      </div>
+      ${this.editing
+            ? this.roomForm(s)
+            : b `<div class="rooms">
+              ${Object.entries(s.configuration.rooms).map(([id, room]) => b `<div class="room">
+                    <div>
+                      <h3>${room.name}</h3>
+                      <small
+                        >${room.trvs.length}
+                        thermostat${room.trvs.length === 1 ? "" : "s"} ·
+                        ${s.configuration.profiles[room.profile_id]?.name ??
+                "No profile"}${room.enabled ? "" : " · Disabled"}</small
+                      >
+                      <div class="room-tags">
+                        ${room.trvs.map((trv) => b `<span class="badge"
+                              >${String(this.hass?.states[trv]?.attributes
+                .friendly_name ?? trv)}</span
+                            >`)}
+                      </div>
+                    </div>
+                    <button
+                      ?disabled=${!this.writable}
+                      @click=${() => this.editRoom(id)}
+                    >
+                      Edit<span class="sr-only"> ${room.name}</span>
+                    </button>
+                  </div>`)}
+            </div>
+            ${!Object.keys(s.configuration.rooms).length
+                ? b `<div class="empty">No rooms have been configured.</div>`
+                : A}`}`;
+    }
+    editRoom(id) {
+        const room = id ? this.status?.configuration.rooms[id] : undefined;
+        this.editing = {
+            id,
+            room: room
+                ? { ...room, trvs: [...room.trvs] }
+                : {
+                    name: "",
+                    trvs: [],
+                    profile_id: Object.keys(this.status?.configuration.profiles ?? {})[0] ?? "",
+                    area_id: null,
+                    enabled: true,
+                },
+        };
+        this.filter = "";
         this.deleting = null;
-    } }}>Confirm delete</button></div></div>` : A}</form>`; }
-    schedules(s) { return b `<div class="toolbar"><div><h2>Weekly profiles</h2><p class="muted">A clear plan for every room.</p></div><span class="badge">Preview</span></div><div class="panel"><p>The week-grid editor is coming in the next update. Your existing profiles keep running.</p>${Object.entries(s.configuration.profiles).map(([id, profile]) => b `<div class="profile-row"><div><h3>${profile.name}</h3><small>${Object.values(s.configuration.rooms).filter(room => room.profile_id === id).map(room => room.name).join(', ') || 'No rooms assigned'}</small></div><span class="badge">Weekly schedule</span></div>`)}${!Object.keys(s.configuration.profiles).length ? b `<p class="muted">No profiles yet. Add a room to create a simple default profile.</p>` : A}</div>`; }
-    settings(s) { const settings = s.configuration.settings; return b `<h2>Heating settings</h2><p class="muted">Fine-tune comfort and thermostat synchronization.</p><form class="panel" @submit=${this.saveSettings}><fieldset ?disabled=${!this.writable || this.busy}><section class="setting-section"><legend>Temperature controls</legend><div class="form-grid">${this.numberField('frost_temperature', 'Frost temperature', settings.frost_temperature, 5, 18, .5, '°C · used in summer and as the boiler fallback')}${this.numberField('hysteresis', 'Demand hysteresis', settings.hysteresis, .1, 1, .1, '°C · gap before a thermostat calls for heat')}${this.numberField('away_temperature', 'Away temperature', settings.away_temperature, 5, 30, .5, '°C · room target while away')}</div></section><section class="setting-section"><legend>Overrides & synchronization</legend><div class="form-grid"><div class="field"><label for="override_default">Default override length</label><select id="override_default" name="override_default"><option value="next_block" ?selected=${settings.override_default === 'next_block'}>Until the next change</option><option value="duration" ?selected=${settings.override_default === 'duration'}>Fixed duration</option></select></div>${this.numberField('override_minutes', 'Default duration', settings.override_minutes, 1, 10080, 1, 'Minutes · when fixed duration is selected')}${this.numberField('retry_seconds', 'Retry interval', settings.retry_seconds, 1, undefined, 1, 'Seconds · wait for a battery thermostat to report')}<label class="check"><input type="checkbox" name="sync_rooms_on_knob_change" .checked=${settings.sync_rooms_on_knob_change}>Sync the room after a thermostat knob change</label></div></section><section class="setting-section"><legend>Boiler output</legend><label class="check"><input type="checkbox" name="shadow" .checked=${s.configuration.shadow}>Shadow mode</label><small>Computes boiler demand without sending boiler commands. Room schedules still apply; use manual mode to pause them.</small></section><div class="actions"><button class="primary" type="submit">${this.busy ? 'Saving…' : 'Save settings'}</button></div></fieldset></form>`; }
-    numberField(name, label, value, min, max, step, hint) { return b `<div class="field"><label for=${name}>${label}</label><input id=${name} name=${name} type="number" min=${min} max=${max ?? A} step=${step} required .value=${String(value)}><span class="hint">${hint}</span></div>`; }
+    }
+    roomForm(s) {
+        const draft = this.editing;
+        const used = new Set(Object.entries(s.configuration.rooms)
+            .filter(([id]) => id !== draft.id)
+            .flatMap(([, room]) => room.trvs));
+        const entities = Object.entries(this.hass?.states ?? {}).filter(([id]) => id.startsWith("climate.") &&
+            !used.has(id) &&
+            !(s.room_entity_ids ?? []).includes(id));
+        const profiles = Object.entries(s.configuration.profiles);
+        return b `<form class="panel" @submit=${this.saveRoom}>
+      <h2>${draft.id ? "Edit room" : "Add a room"}</h2>
+      <fieldset ?disabled=${this.busy || !this.writable}>
+        <div class="form-grid">
+          <div class="field">
+            <label for="room-name">Room name</label
+            ><input
+              id="room-name"
+              name="name"
+              required
+              maxlength="120"
+              .value=${draft.room.name}
+            />
+          </div>
+          <div class="field">
+            <label for="room-profile">Heating profile</label
+            ><select
+              id="room-profile"
+              name="profile_id"
+              .value=${draft.room.profile_id}
+            >
+              ${profiles.length
+            ? profiles.map(([id, p]) => b `<option value=${id}>${p.name}</option>`)
+            : b `<option value="">
+                    Create default · 18° all week
+                  </option>`}</select
+            >${!profiles.length
+            ? b `<small
+                  >A simple 00:00 → 18° profile will be created when you
+                  save.</small
+                >`
+            : A}
+          </div>
+          <div class="field wide">
+            <label for="trv-filter">Radiator thermostats</label
+            ><input
+              id="trv-filter"
+              type="search"
+              placeholder="Find a climate entity"
+              .value=${this.filter}
+              @input=${(e) => {
+            this.filter = e.target.value;
+        }}
+            />
+            <div class="entity-list">
+              ${entities.map(([id, state]) => b `<label
+                    class="check"
+                    ?hidden=${!`${id} ${state.attributes.friendly_name ?? ""}`
+            .toLowerCase()
+            .includes(this.filter.toLowerCase())}
+                    ><input
+                      type="checkbox"
+                      name="trvs"
+                      value=${id}
+                      .checked=${draft.room.trvs.includes(id)}
+                    /><span
+                      >${String(state.attributes.friendly_name ?? id)}<small
+                        >${id}</small
+                      ></span
+                    ></label
+                  >`)}
+            </div>
+            <small
+              >Climate entities already assigned to another room are
+              excluded.</small
+            >
+          </div>
+          <div class="field">
+            <label for="area">Area (optional)</label
+            ><input
+              id="area"
+              name="area_id"
+              list="areas"
+              .value=${draft.room.area_id ?? ""}
+              placeholder="No area"
+            /><datalist id="areas">
+              ${Object.entries(this.hass?.areas ?? {}).map(([id, area]) => b `<option value=${id}>${area.name}</option>`)}
+            </datalist>
+          </div>
+          <div class="field">
+            <span class="label">Room control</span
+            ><label class="check"
+              ><input
+                type="checkbox"
+                name="enabled"
+                .checked=${draft.room.enabled}
+              />Enabled</label
+            >
+          </div>
+        </div>
+        <div class="actions">
+          ${draft.id
+            ? b `<button
+                class="danger"
+                type="button"
+                @click=${() => {
+                this.deleting = draft.id ?? null;
+            }}
+              >
+                Delete room
+              </button>`
+            : A}<button
+            type="button"
+            @click=${() => {
+            this.editing = null;
+            this.deleting = null;
+        }}
+          >
+            Cancel</button
+          ><button class="primary" type="submit">
+            ${this.busy ? "Saving…" : "Save room"}
+          </button>
+        </div>
+      </fieldset>
+      ${this.deleting
+            ? b `<div class="delete-confirm" role="alert">
+            <p>
+              Delete ${draft.room.name}? Its thermostats will no longer be
+              scheduled by this room.
+            </p>
+            <div class="actions">
+              <button
+                type="button"
+                @click=${() => {
+                this.deleting = null;
+            }}
+              >
+                Keep room</button
+              ><button
+                type="button"
+                class="danger"
+                @click=${async () => {
+                if (await this.write("room/delete", { room_id: draft.id }, "Room deleted.")) {
+                    this.editing = null;
+                    this.deleting = null;
+                }
+            }}
+              >
+                Confirm delete
+              </button>
+            </div>
+          </div>`
+            : A}
+    </form>`;
+    }
+    schedules(s) {
+        return b `<div class="toolbar">
+        <div>
+          <h2>Weekly profiles</h2>
+          <p class="muted">A clear plan for every room.</p>
+        </div>
+        <span class="badge">Preview</span>
+      </div>
+      <div class="panel">
+        <p>
+          The week-grid editor is coming in the next update. Your existing
+          profiles keep running.
+        </p>
+        ${Object.entries(s.configuration.profiles).map(([id, profile]) => b `<div class="profile-row">
+              <div>
+                <h3>${profile.name}</h3>
+                <small
+                  >${Object.values(s.configuration.rooms)
+            .filter((room) => room.profile_id === id)
+            .map((room) => room.name)
+            .join(", ") || "No rooms assigned"}</small
+                >
+              </div>
+              <span class="badge">Weekly schedule</span>
+            </div>`)}${!Object.keys(s.configuration.profiles).length
+            ? b `<p class="muted">
+              No profiles yet. Add a room to create a simple default profile.
+            </p>`
+            : A}
+      </div>`;
+    }
+    settings(s) {
+        const settings = s.configuration.settings;
+        return b `<h2>Heating settings</h2>
+      <p class="muted">Fine-tune comfort and thermostat synchronization.</p>
+      <form class="panel" @submit=${this.saveSettings}>
+        <fieldset ?disabled=${!this.writable || this.busy}>
+          <section class="setting-section">
+            <legend>Temperature controls</legend>
+            <div class="form-grid">
+              ${this.numberField("frost_temperature", "Frost temperature", settings.frost_temperature, 5, 18, 0.5, "°C · used in summer and as the boiler fallback")}${this.numberField("hysteresis", "Demand hysteresis", settings.hysteresis, 0.1, 1, 0.1, "°C · gap before a thermostat calls for heat")}${this.numberField("away_temperature", "Away temperature", settings.away_temperature, 5, 30, 0.5, "°C · room target while away")}
+            </div>
+          </section>
+          <section class="setting-section">
+            <legend>Overrides & synchronization</legend>
+            <div class="form-grid">
+              <div class="field">
+                <label for="override_default">Default override length</label
+                ><select id="override_default" name="override_default">
+                  <option
+                    value="next_block"
+                    ?selected=${settings.override_default === "next_block"}
+                  >
+                    Until the next change
+                  </option>
+                  <option
+                    value="duration"
+                    ?selected=${settings.override_default === "duration"}
+                  >
+                    Fixed duration
+                  </option>
+                </select>
+              </div>
+              ${this.numberField("override_minutes", "Default duration", settings.override_minutes, 1, 10080, 1, "Minutes · when fixed duration is selected")}${this.numberField("retry_seconds", "Retry interval", settings.retry_seconds, 1, undefined, 1, "Seconds · wait for a battery thermostat to report")}<label class="check"
+                ><input
+                  type="checkbox"
+                  name="sync_rooms_on_knob_change"
+                  .checked=${settings.sync_rooms_on_knob_change}
+                />Sync the room after a thermostat knob change</label
+              >
+            </div>
+          </section>
+          <section class="setting-section">
+            <legend>Boiler output</legend>
+            <label class="check"
+              ><input
+                type="checkbox"
+                name="shadow"
+                .checked=${s.configuration.shadow}
+              />Shadow mode</label
+            ><small
+              >Computes boiler demand without sending boiler commands. Room
+              schedules still apply; use manual mode to pause them.</small
+            >
+          </section>
+          <div class="actions">
+            <button class="primary" type="submit">
+              ${this.busy ? "Saving…" : "Save settings"}
+            </button>
+          </div>
+        </fieldset>
+      </form>`;
+    }
+    numberField(name, label, value, min, max, step, hint) {
+        return b `<div class="field">
+      <label for=${name}>${label}</label
+      ><input
+        id=${name}
+        name=${name}
+        type="number"
+        min=${min}
+        max=${max ?? A}
+        step=${step}
+        required
+        .value=${String(value)}
+      /><span class="hint">${hint}</span>
+    </div>`;
+    }
 }
 class CentralHeatingEditor extends i {
     constructor() {
         super(...arguments);
-        this.config = { type: 'custom:central-heating-card' };
+        this.config = { type: "custom:central-heating-card" };
         this.entries = [];
-        this.error = '';
+        this.error = "";
         this.loaded = false;
     }
-    static { this.properties = { entries: { state: true }, config: { state: true }, error: { state: true } }; }
+    static { this.properties = {
+        entries: { state: true },
+        config: { state: true },
+        error: { state: true },
+    }; }
     static { this.styles = styles; }
-    set hass(value) { if (!this.loaded) {
-        this.loaded = true;
-        void HeatingClient.entries(value).then(entries => { this.entries = entries; }).catch(() => { this.error = 'Could not load heating instances.'; this.loaded = false; });
-    } }
-    setConfig(value) { this.config = { ...value }; }
-    render() { return b `<div class="field"><label for="entry">Heating instance</label><select id="entry" .value=${this.config.config_entry_id ?? ''} @change=${(e) => this.change({ config_entry_id: e.target.value || undefined })}><option value="">${this.entries.length === 1 ? 'Use the only instance' : 'Choose an instance'}</option>${this.entries.map(entry => b `<option value=${entry.entry_id}>${entry.title}</option>`)}</select><label for="title">Title (optional)</label><input id="title" .value=${this.config.title ?? ''} @change=${(e) => this.change({ title: e.target.value || undefined })}>${this.error ? b `<p role="alert">${this.error}</p>` : A}</div>`; }
-    change(values) { this.config = { ...this.config, ...values }; this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this.config }, bubbles: true, composed: true })); }
+    set hass(value) {
+        if (!this.loaded) {
+            this.loaded = true;
+            void HeatingClient.entries(value)
+                .then((entries) => {
+                this.entries = entries;
+            })
+                .catch(() => {
+                this.error = "Could not load heating instances.";
+                this.loaded = false;
+            });
+        }
+    }
+    setConfig(value) {
+        this.config = { ...value };
+    }
+    render() {
+        return b `<div class="field">
+      <label for="entry">Heating instance</label
+      ><select
+        id="entry"
+        .value=${this.config.config_entry_id ?? ""}
+        @change=${(e) => this.change({
+            config_entry_id: e.target.value || undefined,
+        })}
+      >
+        <option value="">
+          ${this.entries.length === 1
+            ? "Use the only instance"
+            : "Choose an instance"}
+        </option>
+        ${this.entries.map((entry) => b `<option value=${entry.entry_id}>${entry.title}</option>`)}</select
+      ><label for="title">Title (optional)</label
+      ><input
+        id="title"
+        .value=${this.config.title ?? ""}
+        @change=${(e) => this.change({
+            title: e.target.value || undefined,
+        })}
+      />${this.error ? b `<p role="alert">${this.error}</p>` : A}
+    </div>`;
+    }
+    change(values) {
+        this.config = { ...this.config, ...values };
+        this.dispatchEvent(new CustomEvent("config-changed", {
+            detail: { config: this.config },
+            bubbles: true,
+            composed: true,
+        }));
+    }
 }
-if (!customElements.get('central-heating-card'))
-    customElements.define('central-heating-card', CentralHeatingCard);
-if (!customElements.get('central-heating-card-editor'))
-    customElements.define('central-heating-card-editor', CentralHeatingEditor);
+if (!customElements.get("central-heating-card"))
+    customElements.define("central-heating-card", CentralHeatingCard);
+if (!customElements.get("central-heating-card-editor"))
+    customElements.define("central-heating-card-editor", CentralHeatingEditor);
 const registry = window;
 registry.customCards ??= [];
-if (!registry.customCards.some(card => card.type === 'central-heating-card'))
-    registry.customCards.push({ type: 'central-heating-card', name: 'Central Heating', description: 'Room comfort, boiler demand and heating schedules.' });
+if (!registry.customCards.some((card) => card.type === "central-heating-card"))
+    registry.customCards.push({
+        type: "central-heating-card",
+        name: "Central Heating",
+        description: "Room comfort, boiler demand and heating schedules.",
+    });
 
 export { CentralHeatingCard };

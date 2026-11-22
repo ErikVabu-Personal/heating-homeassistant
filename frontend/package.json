@@ -1,6 +1,30 @@
 {
-  "name": "central-heating-card", "private": true, "version": "0.1.0", "type": "module",
-  "scripts": {"build": "rollup -c", "typecheck": "tsc --noEmit", "lint": "eslint src demo", "test": "vitest run", "dev": "vite --host 0.0.0.0"},
-  "dependencies": {"lit": "3.3.1"},
-  "devDependencies": {"@eslint/js": "9.39.1", "@rollup/plugin-node-resolve": "16.0.3", "@rollup/plugin-typescript": "12.3.0", "eslint": "9.39.1", "rollup": "4.52.4", "tslib": "2.8.1", "typescript": "5.9.3", "typescript-eslint": "8.46.3", "vite": "6.4.1", "vitest": "3.2.4"}
+  "name": "central-heating-card",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src demo",
+    "test": "vitest run",
+    "dev": "vite --host 0.0.0.0"
+  },
+  "dependencies": {
+    "lit": "3.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@rollup/plugin-node-resolve": "16.0.3",
+    "@rollup/plugin-typescript": "12.3.0",
+    "eslint": "9.39.1",
+    "jsdom": "26.1.0",
+    "prettier": "3.6.2",
+    "rollup": "4.52.4",
+    "tslib": "2.8.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.3",
+    "vite": "6.4.1",
+    "vitest": "3.2.4"
+  }
 }
