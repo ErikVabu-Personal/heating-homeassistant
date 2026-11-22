@@ -56,7 +56,8 @@ def profile_payload(name="Profile B"):
 async def test_get_discovery_and_live_status(client, entry):
     await client.send_json_auto_id({"type": f"{DOMAIN}/get"})
     result = await client.receive_json()
-    assert result["result"] == {"entries": [{"entry_id": entry.entry_id, "title": "Boiler A"}]}
+    assert result["result"]["entries"] == [{"entry_id": entry.entry_id, "title": "Boiler A"}]
+    assert len(result["result"]["room_entity_ids"]) == 1
     result = await command(client, entry, "get")
     assert result["success"]
     status = result["result"]
@@ -276,3 +277,79 @@ async def test_websocket_registers_once(hass, entry):
     with patch("homeassistant.components.websocket_api.async_register_command") as register:
         async_register_websocket(hass)
         register.assert_not_called()
+
+
+async def test_status_exposes_real_virtual_entities_across_instances(hass, client, entry):
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    own_room = entry.runtime_data.store.data.rooms[0]
+    own_entity = registry.async_get_entity_id(
+        "climate", DOMAIN, f"{entry.entry_id}_room_{own_room.id}"
+    )
+    assert own_entity is not None
+    other = MockConfigEntry(
+        domain=DOMAIN, data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    other_entity = registry.async_get_or_create(
+        "climate",
+        DOMAIN,
+        f"{other.entry_id}_room_other",
+        suggested_object_id="renamed_room",
+        config_entry=other,
+    )
+    # Real entity IDs can be user-renamed and do not contain random room IDs.
+    assert other_entity.entity_id == "climate.renamed_room"
+    result = await command(client, entry, "get")
+    assert result["result"]["rooms"][own_room.id]["entity_id"] == own_entity
+    assert set(result["result"]["room_entity_ids"]) == {own_entity, other_entity.entity_id}
+    await client.send_json_auto_id({"type": f"{DOMAIN}/get"})
+    discovery = await client.receive_json()
+    assert other_entity.entity_id in discovery["result"]["room_entity_ids"]
+
+
+async def test_explicit_next_change_ignores_duration_default(client, entry, freezer):
+    from datetime import UTC, datetime, timedelta
+
+    engine = entry.runtime_data
+    room_id = engine.store.data.rooms[0].id
+    freezer.move_to("2026-01-05T08:00:00+00:00")
+    await engine.store.async_settings(override_default="duration", override_minutes=37)
+    result = await command(
+        client, entry, "override/set", room_id=room_id, temperature=23, kind="next_block"
+    )
+    assert result["success"]
+    assert engine.store.data.overrides[0].until == datetime(
+        2026, 1, 12, 8, tzinfo=UTC
+    )  # Constant week cap.
+    result = await command(
+        client, entry, "override/set", room_id=room_id, temperature=23, kind="duration", minutes=60
+    )
+    assert result["success"]
+    assert engine.store.data.overrides[0].until == datetime(2026, 1, 5, 8, tzinfo=UTC) + timedelta(
+        minutes=60
+    )
+    result = await command(
+        client, entry, "override/set", room_id=room_id, temperature=23, kind="duration"
+    )
+    assert result["success"]
+    assert engine.store.data.overrides[0].until == datetime(2026, 1, 5, 8, tzinfo=UTC) + timedelta(
+        minutes=37
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "next_block", "minutes": 60},
+        {"kind": "invalid"},
+    ],
+)
+async def test_invalid_explicit_override_kind_is_atomic(client, entry, payload):
+    before = entry.runtime_data.store.data
+    result = await command(
+        client, entry, "override/set", room_id=before.rooms[0].id, temperature=23, **payload
+    )
+    assert not result["success"]
+    assert entry.runtime_data.store.data is before

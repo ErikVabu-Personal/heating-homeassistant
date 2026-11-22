@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
@@ -72,6 +73,7 @@ SCHEMAS = {
         vol.Required("room_id"): _ID,
         vol.Required("temperature"): _NUMBER,
         vol.Optional("minutes"): vol.All(int, vol.Range(min=1, max=10080)),
+        vol.Optional("kind"): vol.In(["next_block", "duration"]),
     },
     "override/clear": {vol.Required("config_entry_id"): _ID, vol.Required("room_id"): _ID},
 }
@@ -85,6 +87,16 @@ def _entry(hass, entry_id):
 
 
 @callback
+def room_entity_ids(hass):
+    """Virtual room climates are never physical thermostats, including other instances."""
+    return sorted(
+        item.entity_id
+        for item in er.async_get(hass).entities.values()
+        if item.platform == DOMAIN and item.entity_id.startswith("climate.")
+    )
+
+
+@callback
 def status(entry):
     """Build a detached, JSON-safe snapshot without changing any heating state."""
     engine = entry.runtime_data
@@ -95,6 +107,9 @@ def status(entry):
         attributes = entity.extra_state_attributes
         rooms[room.id] = {
             "name": room.name,
+            "entity_id": er.async_get(engine.hass).async_get_entity_id(
+                "climate", DOMAIN, f"{entry.entry_id}_room_{room.id}"
+            ),
             "current": entity.native_current_temperature,
             "desired": engine.rooms.desired(room),
             "target": entity.native_target_temperature,
@@ -119,6 +134,7 @@ def status(entry):
     config = to_json(engine.store.data)
     return {
         "config_entry_id": entry.entry_id,
+        "room_entity_ids": room_entity_ids(engine.hass),
         "configuration": config,
         "global": {
             "demand_count": engine.demand.demand_count,
@@ -146,7 +162,11 @@ async def _write(entry, command, msg):
         async with engine._room_lock:
             if command == "override/set":
                 await engine.rooms.async_set_override(
-                    msg["room_id"], msg["temperature"], msg.get("minutes"), source="card"
+                    msg["room_id"],
+                    msg["temperature"],
+                    msg.get("minutes"),
+                    source="card",
+                    kind=msg.get("kind"),
                 )
             else:
                 await engine.rooms.async_clear_override(msg["room_id"])
@@ -269,7 +289,8 @@ def async_register_websocket(hass):
                             {"entry_id": entry.entry_id, "title": entry.title}
                             for entry in hass.config_entries.async_entries(DOMAIN)
                             if entry.state is ConfigEntryState.LOADED
-                        ]
+                        ],
+                        "room_entity_ids": room_entity_ids(hass),
                     },
                 )
                 return
