@@ -234,7 +234,7 @@ class RoomController:
             edited = {
                 key
                 for key, profile in profiles.items()
-                if key in self._profile_data and profile != self._profile_data[key]
+                if key in self._profile_data and profile.days != self._profile_data[key].days
             }
             room_profiles = {room.id: room.profile_id for room in self.store.data.rooms}
             surviving = tuple(

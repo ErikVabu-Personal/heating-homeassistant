@@ -1,7 +1,14 @@
 import { LitElement, html, nothing, svg, type TemplateResult } from "lit";
 import { HeatingClient, overridePayload } from "./api";
-import { defaultProfile, localDateTime, temperature, time } from "./format";
+import {
+  defaultProfile,
+  localDateTime,
+  temperature,
+  time,
+  scheduleTime,
+} from "./format";
 import "./schedules";
+import { modeNames, modeExplanation } from "./modes";
 import { styles } from "./styles";
 import type {
   CardConfig,
@@ -33,6 +40,8 @@ export class CentralHeatingCard extends LitElement {
     deleting: { state: true },
     reconnecting: { state: true },
     shadowConfirm: { state: true },
+    modeDraft: { state: true },
+    modeUntilDraft: { state: true },
   };
   status?: Status;
   tab: Tab = "Overview";
@@ -47,6 +56,8 @@ export class CentralHeatingCard extends LitElement {
   deleting: string | null = null;
   reconnecting = false;
   shadowConfirm = false;
+  modeDraft?: Mode;
+  modeUntilDraft?: string;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private retryAttempt = 0;
   private removeConnectionListeners?: () => void;
@@ -104,6 +115,8 @@ export class CentralHeatingCard extends LitElement {
     this.disconnect();
   }
   private disconnect() {
+    this.modeDraft = undefined;
+    this.modeUntilDraft = undefined;
     this.generation++;
     this.releaseSubscription();
     this.removeConnectionListeners?.();
@@ -271,7 +284,7 @@ export class CentralHeatingCard extends LitElement {
           <h1>${this.config.title ?? "Central Heating"}</h1>
           <small
             >${s
-              ? `${Object.keys(s.rooms).length} rooms · ${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)}`
+              ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}`
               : "Your rooms, one comfortable home"}</small
           >
         </div>
@@ -357,6 +370,10 @@ export class CentralHeatingCard extends LitElement {
       ?.focus();
   };
   private overview(s: Status) {
+    const selectedMode = this.modeDraft ?? s.configuration.mode.value;
+    const selectedUntil =
+      this.modeUntilDraft ??
+      localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone);
     return html`<div class="grid">
         <section class="panel boiler" aria-label="Boiler status">
           <div class="boiler-heading">
@@ -396,39 +413,45 @@ export class CentralHeatingCard extends LitElement {
                 ><select
                   id="mode"
                   name="mode"
+                  aria-describedby="mode-explanation"
                   @change=${(e: Event) => {
-                    const form = (e.target as HTMLSelectElement).form!;
-                    const field =
-                      form.querySelector<HTMLElement>("[data-until]")!;
-                    field.hidden =
-                      (e.target as HTMLSelectElement).value !== "away";
+                    this.modeDraft = (e.target as HTMLSelectElement)
+                      .value as Mode;
                   }}
                 >
                   ${(["auto", "away", "summer", "manual"] as Mode[]).map(
                     (mode) =>
                       html`<option
                         value=${mode}
-                        ?selected=${s.configuration.mode.value === mode}
+                        ?selected=${selectedMode === mode}
                       >
-                        ${mode[0].toUpperCase() + mode.slice(1)}
+                        ${modeNames[mode]}
                       </option>`,
                   )}
                 </select>
+                <small id="mode-explanation" aria-live="polite"
+                  >${modeExplanation(
+                    selectedMode,
+                    s.configuration.settings,
+                    selectedMode === "away" && selectedUntil
+                      ? scheduleTime(
+                          selectedUntil.slice(11, 16),
+                          this.hass?.locale,
+                        )
+                      : undefined,
+                  )}</small
+                >
               </div>
-              <div
-                class="field"
-                data-until
-                ?hidden=${s.configuration.mode.value !== "away"}
-              >
+              <div class="field" data-until ?hidden=${selectedMode !== "away"}>
                 <label for="until">Away until (optional)</label
                 ><input
                   id="until"
                   name="until"
                   type="datetime-local"
-                  .value=${localDateTime(
-                    s.configuration.mode.until,
-                    this.hass?.config?.time_zone,
-                  )}
+                  .value=${selectedUntil}
+                  @input=${(e: Event) => {
+                    this.modeUntilDraft = (e.target as HTMLInputElement).value;
+                  }}
                 /><small>Home Assistant’s local time.</small>
               </div>
               <button class="primary" type="submit">
@@ -459,12 +482,12 @@ export class CentralHeatingCard extends LitElement {
                 </div>
                 <small
                   >${s.configuration.mode.value !== "auto"
-                    ? `${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)} · ${temperature(room.desired ?? room.target)}`
+                    ? `${modeNames[s.configuration.mode.value]} · ${temperature(room.desired ?? room.target)}`
                     : room.override_until
-                      ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+                      ? `Schedule · Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
                       : room.demanding
-                        ? "Calling for heat"
-                        : "Comfort on schedule"}</small
+                        ? "Schedule · Calling for heat"
+                        : "Schedule · Following profile"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until
@@ -515,7 +538,10 @@ export class CentralHeatingCard extends LitElement {
     const mode = String(data.get("mode"));
     const until =
       mode === "away" && data.get("until") ? String(data.get("until")) : null;
-    await this.write("mode/set", { mode, until }, "Heating mode saved.");
+    if (await this.write("mode/set", { mode, until }, "Heating mode saved.")) {
+      this.modeDraft = undefined;
+      this.modeUntilDraft = undefined;
+    }
   };
   private async openQuick(id: string) {
     const room = this.status?.rooms[id];

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { modeNames } from "./modes";
 import { CentralHeatingCard } from "./card";
 import { fixture } from "../demo/fixture";
 import type { Hass, Message, Status, SubscriptionEvent } from "./types";
@@ -543,9 +544,7 @@ it.each(["away", "summer", "manual"] as const)(
     card.requestUpdate();
     await settle(card);
     expect(card.shadowRoot!.textContent).not.toContain("Comfort on schedule");
-    expect(card.shadowRoot!.textContent).toContain(
-      `${mode[0].toUpperCase() + mode.slice(1)} ·`,
-    );
+    expect(card.shadowRoot!.textContent).toContain(`${modeNames[mode]} ·`);
   },
 );
 it("unsubscribes on terminal unload before creating the replacement and marks readings stale", async () => {
@@ -589,3 +588,69 @@ it("preserves unsaved schedule drafts across tab changes", async () => {
   expect(editor.draft!.name).toBe("Unsaved profile");
   expect(editor.dirty).toBe(true);
 });
+
+it("previews each selected mode and live values before Apply while retaining internal option values", async () => {
+  const fake = mocked();
+  fake.hass.locale = { language: "en-GB", time_format: "24" };
+  const card = await mount(fake.hass);
+  card.status!.configuration.settings.away_temperature = 16.5;
+  card.status!.configuration.settings.frost_temperature = 7.5;
+  card.requestUpdate();
+  await settle(card);
+  const select = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
+  expect(
+    [...select.options].map((o) => [o.value, o.textContent!.trim()]),
+  ).toEqual([
+    ["auto", "Schedule"],
+    ["away", "Away"],
+    ["summer", "Heating off"],
+    ["manual", "Manual"],
+  ]);
+  const expected = {
+    auto: "Rooms follow their weekly profiles.",
+    away: "All rooms at 16.5°.",
+    summer: "Boiler heating off, radiators kept at 7.5°. Hot water unaffected.",
+    manual:
+      "Central Heating doesn't touch the radiators; the boiler still follows their demand.",
+  };
+  for (const mode of ["manual", "summer", "away", "auto"] as const) {
+    select.value = mode;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle(card);
+    expect(
+      card.shadowRoot!.querySelector("#mode-explanation")!.textContent,
+    ).toBe(expected[mode]);
+  }
+  expect(writeMessages(fake, "mode/set")).toEqual([]);
+  select.value = "away";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle(card);
+  const until = card.shadowRoot!.querySelector<HTMLInputElement>("#until")!;
+  until.value = "2026-11-23T18:45";
+  until.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle(card);
+  expect(card.shadowRoot!.querySelector("#mode-explanation")!.textContent).toBe(
+    "All rooms at 16.5° (until 18:45).",
+  );
+  until.value = "";
+  until.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle(card);
+  expect(card.shadowRoot!.querySelector("#mode-explanation")!.textContent).toBe(
+    "All rooms at 16.5°.",
+  );
+});
+it.each(["auto", "away", "summer", "manual"] as const)(
+  "uses the %s display name in the header and room status",
+  async (mode) => {
+    const card = await mount(mocked().hass);
+    card.status!.configuration.mode.value = mode;
+    card.requestUpdate();
+    await settle(card);
+    expect(card.shadowRoot!.querySelector("header")!.textContent).toContain(
+      `2 rooms · ${modeNames[mode]}`,
+    );
+    expect(card.shadowRoot!.querySelector(".room")!.textContent).toContain(
+      `${modeNames[mode]} ·`,
+    );
+  },
+);

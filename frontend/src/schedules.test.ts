@@ -242,6 +242,10 @@ it.each(["list", "block"])(
   "rejects out-of-order typed times in the %s editor without clamping (E01)",
   async (editor) => {
     const e = await mount();
+    e.hass = {
+      locale: { language: "en-GB", time_format: "24" },
+    } as import("./types").Hass;
+    await tick(e);
     if (editor === "block") {
       e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
         ".schedule-block",
@@ -389,5 +393,31 @@ it.each([
     await tick(e);
     expect(e.draft!.days.mon[1].start).toBe("06:30");
     expect(e.error).toBe("");
+  },
+);
+
+it.each(["12", "24"] as const)(
+  "formats neighbour rejection bounds in the %s h locale, with no midnight upper bound",
+  async (time_format) => {
+    const e = await mount();
+    e.hass = {
+      locale: { language: "en-GB", time_format },
+    } as import("./types").Hass;
+    await tick(e);
+    input(e, "#start-mon-3", "23:00");
+    await tick(e);
+    expect(e.error).toBe(
+      time_format === "12"
+        ? "Start time must be after 09:00 am and before 10:00 pm."
+        : "Start time must be after 09:00 and before 22:00.",
+    );
+    input(e, "#start-mon-4", "16:00");
+    await tick(e);
+    expect(e.error).toBe(
+      time_format === "12"
+        ? "Start time must be after 05:00 pm."
+        : "Start time must be after 17:00.",
+    );
+    expect(e.error).not.toContain("24:00");
   },
 );

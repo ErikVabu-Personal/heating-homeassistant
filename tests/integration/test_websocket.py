@@ -749,3 +749,61 @@ async def test_profile_edit_recomputes_only_next_change_override_after_reload(
     freezer.tick(timedelta(minutes=5))
     await entry.runtime_data.async_data_changed()
     assert entry.runtime_data.store.data.overrides[0].until == after.until
+
+
+@pytest.mark.parametrize("mode", ["auto", "away", "summer", "manual"])
+async def test_websocket_mode_values_stay_internal(client, entry, mode):
+    result = await command(client, entry, "mode/set", mode=mode)
+    assert result["success"]
+    assert result["result"]["configuration"]["mode"]["value"] == mode
+
+
+@pytest.mark.parametrize("label", ["Schedule", "Away", "Heating off", "Manual", "unknown"])
+async def test_websocket_mode_rejects_display_labels(client, entry, label):
+    before = entry.runtime_data.store.data
+    result = await command(client, entry, "mode/set", mode=label)
+    assert not result["success"]
+    assert entry.runtime_data.store.data is before
+
+
+async def test_o06_constant_week_cap_does_not_slide_on_later_reapply(client, entry, freezer):
+    from datetime import timedelta
+
+    freezer.move_to("2026-01-05T10:00:00+00:00")
+    room = entry.runtime_data.store.data.rooms[0]
+    assert (
+        await command(
+            client, entry, "override/set", room_id=room.id, temperature=23, kind="next_block"
+        )
+    )["success"]
+    freezer.tick(timedelta(hours=1))
+    payload = profile_payload()
+    payload["id"] = room.profile_id
+    for blocks in payload["days"].values():
+        blocks[0]["target"] = 19
+    assert (await command(client, entry, "profile/save", profile=payload))["success"]
+    expected = dt_util.utcnow() + timedelta(days=7)
+    assert entry.runtime_data.store.data.overrides[0].until == expected
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=5))
+        await entry.runtime_data.async_data_changed()
+        assert entry.runtime_data.store.data.overrides[0].until == expected
+
+
+async def test_profile_rename_keeps_next_change_override_expiry(client, entry, freezer):
+    from datetime import timedelta
+
+    freezer.move_to("2026-01-05T10:00:00+00:00")
+    room = entry.runtime_data.store.data.rooms[0]
+    assert (
+        await command(
+            client, entry, "override/set", room_id=room.id, temperature=23, kind="next_block"
+        )
+    )["success"]
+    original = entry.runtime_data.store.data.overrides[0].until
+    freezer.tick(timedelta(minutes=30))
+    payload = profile_payload("Renamed profile")
+    payload["id"] = room.profile_id
+    assert (await command(client, entry, "profile/save", profile=payload))["success"]
+    assert entry.runtime_data.store.data.overrides[0].until == original
+    assert entry.runtime_data.store.data.profiles[0].name == "Renamed profile"

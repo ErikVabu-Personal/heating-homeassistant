@@ -298,7 +298,7 @@ export class HeatingSchedules extends LitElement {
       const before = next === "24:00" ? 1440 : minutes(next);
       if (index === 0 || at <= minutes(previous) || at >= before)
         throw new Error(
-          `Start time must be after ${previous} and before ${next}.`,
+          `Start time must be after ${scheduleTime(previous, this.hass?.locale)}${next === "24:00" ? "" : ` and before ${scheduleTime(next, this.hass?.locale)}`}.`,
         );
       const blocks = dayBlocks.map((block, i) =>
         i === index ? { ...block, start: clock(at) } : block,

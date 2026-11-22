@@ -242,3 +242,31 @@ async def test_service_registration_once_and_apply_now_dispatch(hass, mqtt_mock)
         )
         recalculate.assert_awaited_once_with(apply_rooms=True, force=True)
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("mode", ["auto", "away", "summer", "manual"])
+async def test_mode_service_and_select_keep_internal_values(hass, mqtt_mock, mode):
+    from custom_components.central_heating.select import ModeSelect
+
+    entry, room, climate = await setup_entry(hass)
+    entity = ModeSelect(entry, "mode")
+    assert entity.translation_key == "mode"
+    assert entity.options == ["auto", "away", "summer", "manual"]
+    await hass.services.async_call(
+        DOMAIN, "set_mode", {"config_entry_id": entry.entry_id, "mode": mode}, blocking=True
+    )
+    assert entry.runtime_data.store.data.mode.value == mode
+    assert entity.current_option == mode
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("label", ["Schedule", "Away", "Heating off", "Manual", "unknown"])
+async def test_mode_service_rejects_display_labels(hass, mqtt_mock, label):
+    entry, room, climate = await setup_entry(hass)
+    before = entry.runtime_data.store.data
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, "set_mode", {"config_entry_id": entry.entry_id, "mode": label}, blocking=True
+        )
+    assert entry.runtime_data.store.data is before
+    await hass.config_entries.async_unload(entry.entry_id)
