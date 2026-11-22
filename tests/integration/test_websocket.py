@@ -234,6 +234,7 @@ async def test_subscribe_coalesces_once_per_second_and_unsubscribes(hass, client
     subscription_id = result["id"]
     await client.receive_json()  # Initial snapshot.
     assert len(engine._listeners) == before + 1
+    engine.temperature = 18.5
     for _ in range(5):
         engine._notify()
     freezer.tick(0.9)
@@ -353,3 +354,218 @@ async def test_invalid_explicit_override_kind_is_atomic(client, entry, payload):
     )
     assert not result["success"]
     assert entry.runtime_data.store.data is before
+
+
+async def test_fifty_subscribe_cycles_keep_cleanup_sets_and_unload_hooks_flat(client, entry):
+    engine = entry.runtime_data
+    baseline_hooks = len(entry._on_unload or [])
+    baseline_listeners = len(engine._listeners)
+    assert not engine._subscription_cleanups
+    for _ in range(50):
+        result = await command(client, entry, "subscribe")
+        assert result["success"]
+        await client.receive_json()
+        assert len(engine._subscription_cleanups) == 1
+        assert len(engine._listeners) == baseline_listeners + 1
+        assert len(entry._on_unload or []) == baseline_hooks
+        await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": result["id"]})
+        assert (await client.receive_json())["success"]
+        assert not engine._subscription_cleanups
+        assert len(engine._listeners) == baseline_listeners
+        assert len(entry._on_unload or []) == baseline_hooks
+
+
+@pytest.mark.parametrize("reload", [False, True])
+async def test_actual_unload_or_reload_sends_final_unloaded_event(hass, client, entry, reload):
+    engine = entry.runtime_data
+    result = await command(client, entry, "subscribe")
+    initial = await client.receive_json()
+    assert initial["event"]["config_entry_id"] == entry.entry_id
+    engine.temperature = 18.5
+    engine._notify()  # Leave a pending notification: shutdown must cancel it.
+    if reload:
+        assert await hass.config_entries.async_reload(entry.entry_id)
+    else:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    await client.send_json_auto_id({"type": f"{DOMAIN}/get", "config_entry_id": entry.entry_id})
+    final = await client.receive_json()
+    assert final["type"] == "event" and final["id"] == result["id"]
+    assert final["event"] == {"unloaded": True}
+    response = await client.receive_json()
+    assert response["type"] == "result"
+    assert response["success"] is reload
+    assert not engine._subscription_cleanups
+    if reload:
+        assert entry.runtime_data is not engine
+        assert not entry.runtime_data._subscription_cleanups
+
+
+async def test_unchanged_snapshots_do_not_emit_events(hass, client, entry, freezer):
+    engine = entry.runtime_data
+    result = await command(client, entry, "subscribe")
+    await client.receive_json()
+    for _ in range(5):
+        engine._notify()
+    freezer.tick(2)
+    async_fire_time_changed_exact(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    # If an unchanged event was queued, it would arrive before this get's result.
+    response = await command(client, entry, "get")
+    assert response["type"] == "result" and response["success"]
+    await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": result["id"]})
+    assert (await client.receive_json())["success"]
+
+
+async def test_room_delete_removes_climate_registry_state_and_override(hass, client, entry):
+    from homeassistant.helpers import entity_registry as er
+
+    engine = entry.runtime_data
+    room = engine.store.data.rooms[0]
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("climate", DOMAIN, f"{entry.entry_id}_room_{room.id}")
+    assert entity_id and hass.states.get(entity_id) is not None
+    result = await command(client, entry, "override/set", room_id=room.id, temperature=23)
+    assert result["success"] and engine.store.data.overrides
+    result = await command(client, entry, "room/delete", room_id=room.id)
+    assert result["success"]
+    await hass.async_block_till_done()
+    assert not engine.store.data.rooms and not engine.store.data.overrides
+    assert registry.async_get(entity_id) is None
+    assert hass.states.get(entity_id) is None
+    assert room.id not in result["result"]["rooms"]
+
+
+async def test_room_save_rejects_renamed_virtual_thermostat_atomically(hass, client, entry):
+    from homeassistant.helpers import entity_registry as er
+
+    engine = entry.runtime_data
+    room = engine.store.data.rooms[0]
+    registry = er.async_get(hass)
+    own_entity = registry.async_get_entity_id("climate", DOMAIN, f"{entry.entry_id}_room_{room.id}")
+    registry.async_update_entity(own_entity, new_entity_id="climate.renamed_virtual")
+    await hass.async_block_till_done()
+    before = engine.store.data
+    result = await command(
+        client,
+        entry,
+        "room/save",
+        room={"name": "Room B", "trvs": ["climate.renamed_virtual"], "profile_id": room.profile_id},
+    )
+    assert not result["success"] and result["error"]["code"] == "invalid_data"
+    assert engine.store.data is before
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry, loaded):
+    other = MockConfigEntry(
+        domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    profile = Profile("Profile B", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
+    room = Room("Room B", ("climate.shared_trv",), profile.id)
+    store = HeatingStore(hass, other.entry_id)
+    await store.async_update(lambda data: replace(data, profiles=(profile,), rooms=(room,)))
+    if loaded:
+        assert await hass.config_entries.async_setup(other.entry_id)
+        await hass.async_block_till_done()
+    engine = entry.runtime_data
+    before = engine.store.data
+    result = await command(
+        client,
+        entry,
+        "room/save",
+        room={
+            "name": "Room C",
+            "trvs": ["climate.shared_trv"],
+            "profile_id": before.profiles[0].id,
+        },
+    )
+    assert not result["success"] and result["error"]["code"] == "invalid_data"
+    assert engine.store.data is before
+    status = await command(client, entry, "get")
+    assert "climate.shared_trv" in status["result"]["used_trv_ids"]
+    if loaded:
+        await hass.config_entries.async_unload(other.entry_id)
+
+
+async def test_profile_save_reapplies_rooms_to_physical_trv(hass, client, entry):
+    from homeassistant.core import Context
+
+    calls = []
+
+    async def apply(call):
+        calls.append(dict(call.data))
+        state = hass.states.get(call.data["entity_id"])
+        hass.states.async_set(
+            call.data["entity_id"],
+            call.data.get("hvac_mode", state.state),
+            {**state.attributes, "temperature": call.data["temperature"]},
+            context=Context(),
+        )
+
+    hass.services.async_register("climate", "set_temperature", apply)
+    assert (await command(client, entry, "mode/set", mode="auto"))["success"]
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.trv_a").attributes["temperature"] == 18
+    calls.clear()
+    profile = entry.runtime_data.store.data.profiles[0]
+    changed = {
+        "id": profile.id,
+        "name": profile.name,
+        "days": {day: [{"start": "00:00", "target": 22}] for day in WEEKDAYS},
+    }
+    result = await command(client, entry, "profile/save", profile=changed)
+    assert result["success"]
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.trv_a").attributes["temperature"] == 22
+    assert any(call["temperature"] == 22 for call in calls)
+
+
+async def test_partial_settings_preserve_all_unsupplied_values(client, entry):
+    engine = entry.runtime_data
+    await engine.store.async_settings(
+        hysteresis=0.5,
+        away_temperature=14.5,
+        override_default="duration",
+        override_minutes=71,
+        retry_seconds=83,
+        sync_rooms_on_knob_change=False,
+    )
+    before = to_json(engine.store.data)["settings"]
+    result = await command(client, entry, "settings/save", settings={"frost_temperature": 8})
+    assert result["success"]
+    assert to_json(engine.store.data)["settings"] == {**before, "frost_temperature": 8}
+    assert engine.store.data.shadow
+
+
+@pytest.mark.parametrize("kind", ["room", "profile"])
+async def test_saving_unknown_existing_id_is_not_create(client, entry, kind):
+    before = entry.runtime_data.store.data
+    payload = (
+        {
+            "id": "unknown_existing",
+            "name": "Room B",
+            "trvs": ["climate.trv_b"],
+            "profile_id": before.profiles[0].id,
+        }
+        if kind == "room"
+        else {**profile_payload(), "id": "unknown_existing"}
+    )
+    result = await command(client, entry, f"{kind}/save", **{kind: payload})
+    assert not result["success"] and result["error"]["code"] == "invalid_data"
+    assert entry.runtime_data.store.data is before
+
+
+async def test_websocket_shadow_enable_resets_every_send_cache(client, entry):
+    engine = entry.runtime_data
+    engine._last_command = engine.command
+    engine._last_send_tick = 123
+    engine._last_source_tick = 456
+    # Start with real output enabled so toggling to shadow is an actual change.
+    await engine.store.async_update(lambda data: replace(data, shadow=False))
+    result = await command(client, entry, "settings/save", shadow=True)
+    assert result["success"] and engine.store.data.shadow
+    assert engine._last_command is None
+    assert engine._last_send_tick is None
+    assert engine._last_source_tick is None

@@ -43,11 +43,17 @@ class HeatingEngine:
         self._lock = asyncio.Lock()
         self._room_lock = asyncio.Lock()
         self._listeners: set[Callable[[], None]] = set()
+        self._subscription_cleanups: set[Callable[[], None]] = set()
         self._unsubscribers: list[Callable[[], None]] = []
         self._state_unsubscribe: Callable[[], None] | None = None
         self._stopped = False
         self._shutting_down = False
         self.rooms = None
+
+    @callback
+    def close_subscriptions(self) -> None:
+        for cleanup in tuple(self._subscription_cleanups):
+            cleanup()
 
     @callback
     def listen(self, listener: Callable[[], None]) -> Callable[[], None]:
