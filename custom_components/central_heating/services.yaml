@@ -1,0 +1,62 @@
+set_mode:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: central_heating
+    mode:
+      required: true
+      selector:
+        select:
+          options: [auto, away, summer, manual]
+    until:
+      selector:
+        datetime:
+set_override:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: central_heating
+    room:
+      required: true
+      selector:
+        entity:
+          integration: central_heating
+          domain: climate
+    temperature:
+      required: true
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+          unit_of_measurement: °C
+    minutes:
+      selector:
+        number:
+          min: 1
+          max: 10080
+          mode: box
+clear_override:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: central_heating
+    room:
+      required: true
+      selector:
+        entity:
+          integration: central_heating
+          domain: climate
+apply_now:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: central_heating

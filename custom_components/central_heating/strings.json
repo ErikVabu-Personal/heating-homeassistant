@@ -80,6 +80,76 @@
     "mqtt_unavailable": {
       "title": "MQTT unavailable",
       "description": "Central Heating cannot send boiler commands. Check the MQTT integration."
+    },
+    "sync_problem": {
+      "title": "Room synchronization failed",
+      "description": "A radiator thermostat did not confirm its target after three retries. Check the device; this issue clears after a successful synchronization."
+    }
+  },
+  "services": {
+    "set_mode": {
+      "name": "Set mode",
+      "description": "Set the heating mode and optional away end time.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Heating instance",
+          "description": "The Central Heating configuration entry to control."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Choose auto, away, summer or manual."
+        },
+        "until": {
+          "name": "Until",
+          "description": "Optional local end time for away mode, in Home Assistant’s time zone."
+        }
+      }
+    },
+    "set_override": {
+      "name": "Set room override",
+      "description": "Set a temporary room target.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Heating instance",
+          "description": "The Central Heating configuration entry to control."
+        },
+        "room": {
+          "name": "Room",
+          "description": "The Central Heating room climate entity."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "Target temperature from 5 to 30 °C, in steps of 0.5."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Override duration from 1 to 10080 minutes; omit to use the configured default."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Clear room override",
+      "description": "Return a room to its scheduled target.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Heating instance",
+          "description": "The Central Heating configuration entry to control."
+        },
+        "room": {
+          "name": "Room",
+          "description": "The Central Heating room climate entity."
+        }
+      }
+    },
+    "apply_now": {
+      "name": "Apply now",
+      "description": "Rewrite all room targets and restart bounded retries in a writing mode.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Heating instance",
+          "description": "The Central Heating configuration entry to control."
+        }
+      }
     }
   }
 }
