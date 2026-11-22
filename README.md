@@ -5,12 +5,33 @@ heating profiles and its own dashboard card.
 
 **Minimum Home Assistant:** 2026.10.0.
 
-**Status:** development; not ready for live installation. See [`docs/DESIGN.md`](docs/DESIGN.md).
+**Status:** active development. See [`docs/DESIGN.md`](docs/DESIGN.md).
 
 Blocking tests use the supported test-package/Home Assistant pair; move that pair forward when a 2026.11.x-compatible test-package release appears.
 
 
-## Card (part 1)
+## Installation
+
+1. Open Home Assistant's community store (HACS; recent versions call it **Marketplace** under **Settings**).
+2. In **Custom repositories**, add `https://github.com/ErikVabu-Personal/heating-homeassistant` with type **Integration**.
+3. Download **Central Heating** and restart Home Assistant when prompted.
+4. Choose **Add integration → Central Heating** and complete setup.
+5. Add a dashboard card with type `custom:central-heating-card` and select the heating instance.
+   The integration loads the card automatically; no separate resource URL is needed.
+
+## Modes
+
+| Name | Value (services/API) | Behaviour |
+|---|---|---|
+| Schedule | `auto` | Rooms follow their weekly profiles. |
+| Away | `away` | All rooms at the configured away temperature, optionally until an end time. |
+| Heating off | `summer` | Boiler heating off; radiators kept at the frost temperature. Hot water unaffected. |
+| Manual | `manual` | Central Heating doesn't touch the radiators; the boiler still follows their demand. |
+
+Active overrides still take precedence in Schedule and Away. These names are display labels;
+Store values, select options, services and websocket commands keep `auto`, `away`, `summer`, `manual`.
+
+## Card
 
 The integration serves the committed card bundle locally and adds it to Home Assistant once, including with
 multiple boiler entries. Add a **Central Heating** custom card in the dashboard editor and pick the boiler.
@@ -22,8 +43,8 @@ config_entry_id: YOUR_CONFIG_ENTRY_ID
 ```
 
 Overview shows computed boiler demand and shadow mode, room targets, overrides and synchronization problems.
-Rooms edits physical thermostats and profiles; Settings edits tuning, retries and shadow. Schedule profiles are
-listed now; the week-grid editor is a separate next PR. Logged-in users can read; only administrators can write.
+Rooms edits physical thermostats and profiles; Settings edits tuning, retries and shadow. Schedules edits
+weekly profiles with a desktop grid and a phone-friendly day list, with explicit Save/Discard controls. Logged-in users can read; only administrators can write.
 Shadow pauses boiler output, while manual mode pauses room writes.
 
 ### Review without Home Assistant

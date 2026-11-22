@@ -212,12 +212,17 @@ the last block in the day's order wins, including an explicit block at that vali
 uses its first occurrence.
 
 ### 6.2 Modes
-| Mode | Room target written to TRVs | Boiler |
+| Name (internal value) | Room target written to TRVs | Boiler |
 |---|---|---|
-| `auto` | the override if one is active, otherwise the profile block | follows demand |
-| `away` | the override if one is active, otherwise `away_temperature` | follows demand |
-| `summer` | `frost_temperature` | always `off` |
-| `manual` | nothing is written; the TRVs keep whatever they have | follows demand |
+| Schedule (`auto`) | the override if one is active, otherwise the profile block | follows demand |
+| Away (`away`) | the override if one is active, otherwise `away_temperature` | follows demand |
+| Heating off (`summer`) | `frost_temperature` | always `off`; hot water unaffected |
+| Manual (`manual`) | nothing is written; the TRVs keep whatever they have | follows demand |
+
+The card explains the selected mode before Apply: Schedule follows weekly profiles; Away names the live
+away temperature and optional end time; Heating off names the live frost temperature and leaves hot water
+unaffected; Manual leaves radiator targets alone while the boiler follows demand. Labels appear consistently
+in the card and translated HA select states. Store/services/API/select option values remain unchanged.
 
 - `away` can have an `until` time; when it passes, the mode returns to `auto`.
 - The mode is a `select` entity, and is also set through the card or a service.
@@ -287,7 +292,9 @@ uses its first occurrence.
     update it with `settings.override_default`. With `sync_rooms_on_knob_change` on, apply it to the other TRVs.
   - Confirmed commands and commands outside the retry window never mask later knob changes.
 - **Profile edits:** an active `next_block` override recomputes its expiry against the edited profile
-  at the time of the edit; a `duration` override keeps its expiry. Reassigning a room to another profile
+  at the time of a schedule-days edit; a `duration` override keeps its expiry. Renaming a profile alone
+  does not recompute expiry. The stored profile snapshot is refreshed after recomputation, so later re-applies
+  do not slide a constant week’s seven-day cap. Reassigning a room to another profile
   still clears its override. The selected kind is persisted (Store minor version 3) so this also works after
   reload, independently of later changes to override defaults. Legacy overrides without a recorded kind
   retain their existing expiry and load as `duration`: their original kind cannot be recovered reliably.

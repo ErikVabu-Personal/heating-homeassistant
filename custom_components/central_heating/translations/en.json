@@ -37,7 +37,13 @@
   "entity": {
     "select": {
       "mode": {
-        "name": "Mode"
+        "name": "Mode",
+        "state": {
+          "auto": "Schedule",
+          "away": "Away",
+          "summer": "Heating off",
+          "manual": "Manual"
+        }
       }
     },
     "switch": {

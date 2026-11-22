@@ -1032,7 +1032,7 @@ class HeatingSchedules extends i {
             const next = dayBlocks[index + 1]?.start ?? "24:00";
             const before = next === "24:00" ? 1440 : minutes(next);
             if (index === 0 || at <= minutes(previous) || at >= before)
-                throw new Error(`Start time must be after ${previous} and before ${next}.`);
+                throw new Error(`Start time must be after ${scheduleTime(previous, this.hass?.locale)}${next === "24:00" ? "" : ` and before ${scheduleTime(next, this.hass?.locale)}`}.`);
             const blocks = dayBlocks.map((block, i) => i === index ? { ...block, start: clock(at) } : block);
             this.timeInputs.delete(key);
             this.change(day, blocks);
@@ -1563,6 +1563,25 @@ class HeatingSchedules extends i {
 if (!customElements.get("heating-schedules"))
     customElements.define("heating-schedules", HeatingSchedules);
 
+const modeNames = {
+    auto: "Schedule",
+    away: "Away",
+    summer: "Heating off",
+    manual: "Manual",
+};
+function modeExplanation(mode, settings, until) {
+    switch (mode) {
+        case "auto":
+            return "Rooms follow their weekly profiles.";
+        case "away":
+            return `All rooms at ${temperature(settings.away_temperature)}${until ? ` (until ${until})` : ""}.`;
+        case "summer":
+            return `Boiler heating off, radiators kept at ${temperature(settings.frost_temperature)}. Hot water unaffected.`;
+        case "manual":
+            return "Central Heating doesn't touch the radiators; the boiler still follows their demand.";
+    }
+}
+
 const tabs = ["Overview", "Rooms", "Schedules", "Settings"];
 const flame = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3c1 5-4 5-2 9 1-1 2-2 3-3 3 3 5 5 4 8a6 6 0 0 1-12-1c0-4 3-6 4-8 0 3 1 3 2 4"/></svg>`;
 const shield = w `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg>`;
@@ -1611,7 +1630,10 @@ class CentralHeatingCard extends i {
             const data = new FormData(event.target);
             const mode = String(data.get("mode"));
             const until = mode === "away" && data.get("until") ? String(data.get("until")) : null;
-            await this.write("mode/set", { mode, until }, "Heating mode saved.");
+            if (await this.write("mode/set", { mode, until }, "Heating mode saved.")) {
+                this.modeDraft = undefined;
+                this.modeUntilDraft = undefined;
+            }
         };
         this.saveRoom = async (event) => {
             event.preventDefault();
@@ -1679,6 +1701,8 @@ class CentralHeatingCard extends i {
         deleting: { state: true },
         reconnecting: { state: true },
         shadowConfirm: { state: true },
+        modeDraft: { state: true },
+        modeUntilDraft: { state: true },
     }; }
     set hass(value) {
         if (!value) {
@@ -1729,6 +1753,8 @@ class CentralHeatingCard extends i {
         this.disconnect();
     }
     disconnect() {
+        this.modeDraft = undefined;
+        this.modeUntilDraft = undefined;
         this.generation++;
         this.releaseSubscription();
         this.removeConnectionListeners?.();
@@ -1908,7 +1934,7 @@ class CentralHeatingCard extends i {
           <h1>${this.config.title ?? "Central Heating"}</h1>
           <small
             >${s
-            ? `${Object.keys(s.rooms).length} rooms · ${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)}`
+            ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}`
             : "Your rooms, one comfortable home"}</small
           >
         </div>
@@ -1972,6 +1998,9 @@ class CentralHeatingCard extends i {
     >`;
     }
     overview(s) {
+        const selectedMode = this.modeDraft ?? s.configuration.mode.value;
+        const selectedUntil = this.modeUntilDraft ??
+            localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone);
         return b `<div class="grid">
         <section class="panel boiler" aria-label="Boiler status">
           <div class="boiler-heading">
@@ -2011,32 +2040,35 @@ class CentralHeatingCard extends i {
                 ><select
                   id="mode"
                   name="mode"
+                  aria-describedby="mode-explanation"
                   @change=${(e) => {
-            const form = e.target.form;
-            const field = form.querySelector("[data-until]");
-            field.hidden =
-                e.target.value !== "away";
+            this.modeDraft = e.target
+                .value;
         }}
                 >
                   ${["auto", "away", "summer", "manual"].map((mode) => b `<option
                         value=${mode}
-                        ?selected=${s.configuration.mode.value === mode}
+                        ?selected=${selectedMode === mode}
                       >
-                        ${mode[0].toUpperCase() + mode.slice(1)}
+                        ${modeNames[mode]}
                       </option>`)}
                 </select>
+                <small id="mode-explanation" aria-live="polite"
+                  >${modeExplanation(selectedMode, s.configuration.settings, selectedMode === "away" && selectedUntil
+            ? scheduleTime(selectedUntil.slice(11, 16), this.hass?.locale)
+            : undefined)}</small
+                >
               </div>
-              <div
-                class="field"
-                data-until
-                ?hidden=${s.configuration.mode.value !== "away"}
-              >
+              <div class="field" data-until ?hidden=${selectedMode !== "away"}>
                 <label for="until">Away until (optional)</label
                 ><input
                   id="until"
                   name="until"
                   type="datetime-local"
-                  .value=${localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone)}
+                  .value=${selectedUntil}
+                  @input=${(e) => {
+            this.modeUntilDraft = e.target.value;
+        }}
                 /><small>Home Assistant’s local time.</small>
               </div>
               <button class="primary" type="submit">
@@ -2065,12 +2097,12 @@ class CentralHeatingCard extends i {
                 </div>
                 <small
                   >${s.configuration.mode.value !== "auto"
-            ? `${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)} · ${temperature(room.desired ?? room.target)}`
+            ? `${modeNames[s.configuration.mode.value]} · ${temperature(room.desired ?? room.target)}`
             : room.override_until
-                ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+                ? `Schedule · Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
                 : room.demanding
-                    ? "Calling for heat"
-                    : "Comfort on schedule"}</small
+                    ? "Schedule · Calling for heat"
+                    : "Schedule · Following profile"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until

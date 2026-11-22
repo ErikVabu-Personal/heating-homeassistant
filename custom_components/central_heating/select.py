@@ -11,6 +11,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class ModeSelect(HeatingEntity, SelectEntity):
+    _attr_translation_key = "mode"
     _attr_options = list(MODES)
 
     @property
