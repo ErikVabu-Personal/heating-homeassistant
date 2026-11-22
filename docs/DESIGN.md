@@ -239,17 +239,25 @@ uses its first occurrence.
 - **Writing:** gated on `CoreState.running`. For each TRV whose target differs, call
   `climate.set_temperature` with `temperature`. Add `hvac_mode: heat` only if it is in another mode and supports
   heat. A TRV deliberately switched off stays off until the next room trigger; then restore heat if supported,
-  even when its target is already equal. While off it does not contribute to demand.
+  even when its target is already equal. Only a transition into `off` starts the pause; attribute-only reports
+  while off do not cancel an in-flight heat command. While off it does not contribute to demand.
 - **Boiler isolation:** calculate/send the boiler first. Room failures cannot skip that update. TRV service calls
   use `blocking=False`, outside the boiler lock; confirmation and retry logic handles slow radio devices.
-- **Pending commands:** per TRV retain unconfirmed `(value, time, previous value)` commands, with our own Context
-  on service calls. `last_commanded` is diagnostics only. See §6.4 for confirmation.
+- **Pending commands:** per TRV retain unconfirmed `(value, time, previous value, Context)` commands, with our own Context
+  on service calls. `last_commanded` is diagnostics only. See §6.4 for confirmation. If the reported target
+  already equals the desired target but an older command for another target is in flight, enqueue the desired
+  target behind it; retain the older command for echo recognition.
+- **Normal triggers and retry budgets:** an unchanged desired target preserves an existing pending command and
+  its retry counter; a TRV with `sync_problem` is not retried for that same target on normal triggers. A changed
+  desired target starts a new retry budget. Successful synchronization clears the problem; `apply_now` explicitly
+  restarts the budget. Applying targets always reschedules the next boundary in `finally`, even after an error.
 - **Retry:** after `retry_seconds` (default 300 s), check the desired target is unchanged and no foreign change
   occurred. Retry at most 3 times. After the fourth retry interval (the retry window), clear unconfirmed
   commands, set `sync_problem`, log a warning, and raise a Repairs issue. Successful synchronization clears it.
 - **TRV back online:** when a TRV goes from `unavailable` or `unknown` to available, re-apply its room.
 - **`apply_now`:** a manual retry in writing modes: rewrite every available TRV, including already-correct,
-  pending and problem TRVs, reset retry counters and clear previous repair issues. Manual mode writes nothing.
+  pending and problem TRVs, reset retry counters and clear previous repair issues. With knob sync off, this
+  explicitly writes the room target, including any active knob override, to every TRV. Manual mode writes nothing.
 
 ### 6.4 Overrides
 - **From the card or a service:** a target, plus either `next_block` (until the room's next target change) or a
@@ -257,12 +265,19 @@ uses its first occurrence.
   the currently scheduled target, skipping equal-target blocks across midnight and days. If the entire week
   has one target, the override expires after seven elapsed days. The stored `next_block` option keeps its name.
 - **From a TRV knob, only in auto/away:**
-  - A report equal to any pending command is ours regardless of context. Confirm it and drop that command and
-    all older commands; retain any newer unconfirmed commands.
+  - A report equal to any pending command with one of our pending command Contexts is **provisional**: HA
+    may have reported the command optimistically. Keep pending commands and stale guards. Only a matching
+    report with a foreign Context, or the retry check finding the target in place, releases them. Normal room
+    triggers do not confirm an optimistic value. An equal target while still off cannot confirm a command
+    that must restore supported heat mode.
+  - A matching foreign-Context report confirms that command and drops it and all older commands; retain
+    newer unconfirmed commands. Contexts are stored per command so late optimistic echoes of older commands
+    remain provisional too.
   - A report equal to a value from before a still-pending command is stale/optimistic: ignore it. A real knob
     turn back to that old value inside the retry window is indistinguishable and gets corrected by the retry.
   - Any other target change is a knob change. Round to 0.5 and clamp to 5–30. If it equals the room target
-    without an override (profile in auto, away temperature in away), clear the override; otherwise create or
+    without an override (profile in auto, away temperature in away), clear the override if one exists (no Store
+    save when there is nothing to clear); otherwise create or
     update it with `settings.override_default`. With `sync_rooms_on_knob_change` on, apply it to the other TRVs.
   - Confirmed commands and commands outside the retry window never mask later knob changes.
 - **Expiry:** an override expires at its `until`, or when it's cleared, or when the room's profile changes. The
@@ -300,7 +315,7 @@ credentials are involved.
 | `set_mode` | `mode`, optional `until` (`away` only) |
 | `set_override` | `room` (a room's climate entity), `temperature`, optional `minutes` (otherwise the default) |
 | `clear_override` | `room` |
-| `apply_now` | none. Manual retry: rewrites all rooms in a writing mode and resets retries. |
+| `apply_now` | none. Manual retry: rewrites all rooms in a writing mode, including active overrides with knob sync off, and resets retries. |
 
 Services are registered once in `async_setup` and resolve the loaded config entry on every call.
 Override `minutes` accepts 1–10080. Every field has a translated name and description.

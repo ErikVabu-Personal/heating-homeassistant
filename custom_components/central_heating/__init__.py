@@ -9,6 +9,19 @@ if TYPE_CHECKING:
 PLATFORMS = ["select", "switch", "sensor", "binary_sensor", "number", "climate"]
 
 
+def __getattr__(name: str):
+    # HA asks for CONFIG_SCHEMA during setup; defer HA imports for the pure modules.
+    if name == "CONFIG_SCHEMA":
+        from homeassistant.helpers import config_validation as cv
+
+        from .const import DOMAIN
+
+        schema = cv.config_entry_only_config_schema(DOMAIN)
+        globals()[name] = schema
+        return schema
+    raise AttributeError(name)
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     from .services import async_register_services
 
@@ -62,3 +75,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     await HeatingStore(hass, entry.entry_id).async_remove()
     ir.async_delete_issue(hass, DOMAIN, f"mqtt_{entry.entry_id}")
+    for domain, issue_id in tuple(ir.async_get(hass).issues):
+        if domain == DOMAIN and issue_id.startswith(f"sync_{entry.entry_id}_"):
+            ir.async_delete_issue(hass, DOMAIN, issue_id)

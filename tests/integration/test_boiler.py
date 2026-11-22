@@ -473,3 +473,66 @@ async def test_mqtt_unavailable_logged_once_per_transition(hass, caplog):
         await adapter.async_start()
     await adapter.async_start()
     assert caplog.text.count("Central Heating cannot send") == 2
+
+
+@pytest.mark.parametrize("use_options", [False, True])
+async def test_options_flow_rejects_other_boilers_effective_prefix(hass, mqtt_mock, use_options):
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        data={"adapter": ADAPTER, "prefix": "boiler_b/properties"},
+        options={"prefix": "boiler_c/properties"} if use_options else {},
+    )
+    edited = MockConfigEntry(domain=DOMAIN, data={"adapter": ADAPTER, "prefix": DEFAULT_PREFIX})
+    for entry in (other, edited):
+        entry.add_to_hass(hass)
+    original = dict(edited.options)
+    form = await hass.config_entries.options.async_init(edited.entry_id)
+    prefix = other.options.get("prefix", other.data["prefix"])
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {"prefix": prefix})
+    assert result["type"] == "form"
+    assert result["errors"] == {"prefix": "already_configured"}
+    assert dict(edited.options) == original
+    result = await hass.config_entries.options.async_configure(
+        form["flow_id"], {"prefix": DEFAULT_PREFIX}
+    )
+    assert result["type"] == "create_entry"
+    assert result["data"] == {"prefix": DEFAULT_PREFIX}  # Self is not a duplicate.
+
+
+async def test_remove_entry_clears_only_its_own_sync_repairs(hass):
+    from custom_components.central_heating import async_remove_entry
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    own = [f"sync_{entry.entry_id}_climate.trv_a", f"sync_{entry.entry_id}_climate.trv_b"]
+    other = ["sync_other_entry_climate.trv_a", f"sync_{entry.entry_id}suffix_climate.trv_a"]
+    for issue_id in own + other:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="sync_problem",
+        )
+    ir.async_create_issue(
+        hass,
+        "other_domain",
+        own[0],
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="test",
+    )
+    await async_remove_entry(hass, entry)
+    registry = ir.async_get(hass)
+    assert all(registry.async_get_issue(DOMAIN, issue_id) is None for issue_id in own)
+    assert all(registry.async_get_issue(DOMAIN, issue_id) is not None for issue_id in other)
+    assert registry.async_get_issue("other_domain", own[0]) is not None
+
+
+async def test_config_entry_only_schema_is_exposed_without_eager_ha_imports(hass, caplog):
+    from custom_components.central_heating import CONFIG_SCHEMA
+
+    assert callable(CONFIG_SCHEMA)
+    assert CONFIG_SCHEMA({}) == {}
+    assert CONFIG_SCHEMA({DOMAIN: {}, "other": {}}) == {DOMAIN: {}, "other": {}}
+    assert "does not support YAML setup" in caplog.text

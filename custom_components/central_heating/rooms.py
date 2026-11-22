@@ -24,6 +24,7 @@ class SentCommand:
     target: float
     at: datetime
     before: float | None
+    context_id: str
 
 
 @dataclass
@@ -121,6 +122,8 @@ class RoomController:
 
     async def async_clear_override(self, room_id: str) -> None:
         self.room(room_id)
+        if not any(item.room_id == room_id for item in self.store.data.overrides):
+            return
         await self.store.async_update(
             lambda data: replace(
                 data, overrides=tuple(item for item in data.overrides if item.room_id != room_id)
@@ -156,7 +159,7 @@ class RoomController:
             self._clear_problem(trv)
             return room.id
         # Off is a user's deliberate pause until the next room trigger.
-        if new.state == "off":
+        if new.state == "off" and old.state != "off":
             self._cancel_pending(trv)
             return None
         target = available_temperature(new.attributes.get("temperature"))
@@ -168,6 +171,12 @@ class RoomController:
             self._prune(pending)
             matches = [i for i, command in enumerate(pending.commands) if command.target == target]
             if matches:
+                if new.state == "off" and "heat" in (new.attributes.get("hvac_modes") or []):
+                    return None  # Equal target alone cannot confirm a pending heat command.
+                if any(command.context_id == new.context.id for command in pending.commands):
+                    # HA may report the requested value optimistically before the radio write.
+                    # Keep both the commands and their stale guards until a device report/retry.
+                    return None
                 del pending.commands[: matches[-1] + 1]
                 pending.observed = target
                 if not pending.commands:
@@ -192,74 +201,77 @@ class RoomController:
     async def async_apply(self, *, force: bool = False, room_id: str | None = None) -> None:
         if self.hass.state is not CoreState.running:
             return
-        now = dt_util.utcnow()
-        changed_profiles = {
-            room.id
-            for room in self.store.data.rooms
-            if room.id in self._profiles and self._profiles[room.id] != room.profile_id
-        }
-        surviving = tuple(
-            item
-            for item in self.store.data.overrides
-            if item.until.astimezone(UTC) > now and item.room_id not in changed_profiles
-        )
-        if surviving != self.store.data.overrides:
-            await self.store.async_update(lambda data: replace(data, overrides=surviving))
-        self._profiles = {room.id: room.profile_id for room in self.store.data.rooms}
-        active = {trv for room in self.store.data.rooms if room.enabled for trv in room.trvs}
-        for trv in set(self.pending) | self.problems:
-            if trv not in active or self.store.data.mode.value == "manual":
-                self._cancel_pending(trv)
-                self._clear_problem(trv)
-        for room in self.store.data.rooms:
-            if room_id is not None and room.id != room_id:
-                continue
-            desired = self.desired(room, now)
-            override = next(
-                (item for item in self.store.data.overrides if item.room_id == room.id), None
+        try:
+            now = dt_util.utcnow()
+            changed_profiles = {
+                room.id
+                for room in self.store.data.rooms
+                if room.id in self._profiles and self._profiles[room.id] != room.profile_id
+            }
+            surviving = tuple(
+                item
+                for item in self.store.data.overrides
+                if item.until.astimezone(UTC) > now and item.room_id not in changed_profiles
             )
-            if desired is None or (
-                not force
-                and override is not None
-                and override.source == "trv"
-                and not self.store.data.settings.sync_rooms_on_knob_change
-                and self.store.data.mode.value != "summer"
-            ):
-                continue
-            for trv in room.trvs:
-                state = self.hass.states.get(trv)
-                if state is None or state.state in ("unknown", "unavailable"):
+            if surviving != self.store.data.overrides:
+                await self.store.async_update(lambda data: replace(data, overrides=surviving))
+            self._profiles = {room.id: room.profile_id for room in self.store.data.rooms}
+            active = {trv for room in self.store.data.rooms if room.enabled for trv in room.trvs}
+            for trv in set(self.pending) | self.problems:
+                if trv not in active or self.store.data.mode.value == "manual":
+                    self._cancel_pending(trv)
+                    self._clear_problem(trv)
+            for room in self.store.data.rooms:
+                if room_id is not None and room.id != room_id:
                     continue
-                target = available_temperature(state.attributes.get("temperature"))
-                needs_heat = state.state != "heat" and "heat" in state.attributes.get(
-                    "hvac_modes", []
+                desired = self.desired(room, now)
+                override = next(
+                    (item for item in self.store.data.overrides if item.room_id == room.id), None
                 )
-                if not force and target == desired and not needs_heat:
-                    # Don't erase a newer unconfirmed command on a stale state snapshot.
-                    pending = self.pending.get(trv)
-                    if pending is None or pending.target == desired:
-                        self._cancel_pending(trv)
-                        self._clear_problem(trv)
-                    continue
-                previous = self.pending.get(trv)
-                if not force and previous is not None and previous.target == desired:
-                    continue
-                if (
+                if desired is None or (
                     not force
-                    and trv in self.problems
-                    and self.last_commanded.get(trv, (None,))[0] == desired
+                    and override is not None
+                    and override.source == "trv"
+                    and not self.store.data.settings.sync_rooms_on_knob_change
+                    and self.store.data.mode.value != "summer"
                 ):
                     continue
-                commands = []
-                if previous is not None:
-                    self._prune(previous)
-                    commands = previous.commands.copy()
-                self._cancel_pending(trv)
-                self._clear_problem(trv)
-                pending = Pending(desired, target, Context(), commands=commands)
-                self.pending[trv] = pending
-                await self._write(trv, pending)
-        self._reschedule()
+                for trv in room.trvs:
+                    state = self.hass.states.get(trv)
+                    if state is None or state.state in ("unknown", "unavailable"):
+                        continue
+                    target = available_temperature(state.attributes.get("temperature"))
+                    needs_heat = state.state != "heat" and "heat" in (
+                        state.attributes.get("hvac_modes") or []
+                    )
+                    if not force and target == desired and not needs_heat:
+                        # Don't erase a newer unconfirmed command on a stale state snapshot.
+                        pending = self.pending.get(trv)
+                        if pending is None:
+                            self._clear_problem(trv)
+                            continue
+                        if pending.target == desired:
+                            continue  # A normal trigger cannot confirm an optimistic report.
+                    previous = self.pending.get(trv)
+                    if not force and previous is not None and previous.target == desired:
+                        continue
+                    if (
+                        not force
+                        and trv in self.problems
+                        and self.last_commanded.get(trv, (None,))[0] == desired
+                    ):
+                        continue
+                    commands = []
+                    if previous is not None:
+                        self._prune(previous)
+                        commands = previous.commands.copy()
+                    self._cancel_pending(trv)
+                    self._clear_problem(trv)
+                    pending = Pending(desired, target, Context(), commands=commands)
+                    self.pending[trv] = pending
+                    await self._write(trv, pending)
+        finally:
+            self._reschedule()
 
     async def _write(self, trv: str, pending: Pending) -> None:
         if self.hass.state is not CoreState.running or self.engine._stopped:
@@ -269,13 +281,15 @@ class RoomController:
         if (
             state is not None
             and state.state != "heat"
-            and "heat" in state.attributes.get("hvac_modes", [])
+            and "heat" in (state.attributes.get("hvac_modes") or [])
         ):
             values["hvac_mode"] = "heat"
         now = dt_util.utcnow()
         self.last_commanded[trv] = (pending.target, now, pending.context)
         if not pending.commands or pending.commands[-1].target != pending.target:
-            pending.commands.append(SentCommand(pending.target, now, pending.observed))
+            pending.commands.append(
+                SentCommand(pending.target, now, pending.observed, pending.context.id)
+            )
         try:
             # HA schedules the handler; radio latency never holds either control lock.
             await self.hass.services.async_call(
@@ -308,7 +322,12 @@ class RoomController:
                 (room for room in self.store.data.rooms if room.enabled and trv in room.trvs), None
             )
             target = available_temperature(state.attributes.get("temperature")) if state else None
-            if target == pending.target:
+            needs_heat = (
+                state is not None
+                and state.state == "off"
+                and "heat" in (state.attributes.get("hvac_modes") or [])
+            )
+            if target == pending.target and not needs_heat:
                 self._cancel_pending(trv)
                 self._clear_problem(trv)
             elif (

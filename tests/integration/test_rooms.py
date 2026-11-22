@@ -281,10 +281,10 @@ async def test_late_older_echo_after_card_override_keeps_new_target(hass, freeze
     await engine.async_stop(unloading=False)
 
 
-async def test_optimistic_then_stale_then_real_report(hass, freezer):
+async def test_foreign_then_stale_then_real_after_new_card_override(hass, freezer):
     engine, room, calls = await build_rooms(hass, freezer, respond=False)
     await advance(hass, freezer, 10)
-    report(hass, "climate.trv_a", 21)  # optimistic confirmation
+    report(hass, "climate.trv_a", 21)  # Foreign device confirmation
     await hass.async_block_till_done()
     await engine.rooms.async_set_override(room.id, 23, 60, source="card")
     await engine.async_recalculate(apply_rooms=True)
@@ -505,4 +505,254 @@ async def test_no_redundant_hvac_mode_when_already_heat(hass, freezer):
         "hvac_mode"
         not in next(call for call in calls if call.data["entity_id"] == "climate.trv_a").data
     )
+    await engine.async_stop(unloading=False)
+
+
+@pytest.mark.parametrize("source", ["knob", "card"])
+async def test_sleepy_trv_back_to_schedule_queues_corrective_command(hass, freezer, source):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    sleepy = SleepyTRV(hass, "climate.trv_b")
+    if source == "knob":
+        report(hass, "climate.trv_a", 23)
+        await hass.async_block_till_done()
+    else:
+        await engine.rooms.async_set_override(room.id, 23, source="card")
+        await engine.async_recalculate(apply_rooms=True)
+        await hass.async_block_till_done()
+    assert [call.data["temperature"] for call in sleepy.queue] == [23]
+    assert sleepy.physical_target == 21
+    if source == "knob":
+        report(hass, "climate.trv_a", 21)
+        await hass.async_block_till_done()
+    else:
+        await engine.rooms.async_clear_override(room.id)
+        await engine.async_recalculate(apply_rooms=True)
+        await hass.async_block_till_done()
+    assert not engine.store.data.overrides
+    assert [call.data["temperature"] for call in sleepy.queue] == [23, 21]
+    pending = engine.rooms.pending["climate.trv_b"]
+    assert [command.target for command in pending.commands] == [23, 21]
+    await sleepy.wake(count=1)
+    assert sleepy.physical_target == 23
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    assert [command.target for command in pending.commands] == [21]
+    assert pending.cancel is not None
+    assert not engine.store.data.overrides
+    await sleepy.wake()
+    assert sleepy.physical_target == 21
+    assert "climate.trv_b" not in engine.rooms.pending
+    assert not engine.rooms.problems and not engine.store.data.overrides
+    await engine.async_stop(unloading=False)
+
+
+@pytest.mark.parametrize("lost", [False, True])
+async def test_sleepy_optimistic_stale_real_or_lost_command(hass, freezer, lost):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    sleepy = SleepyTRV(hass, "climate.trv_b", optimistic=True)
+    await advance(hass, freezer, 10)  # Schedule requests 21; physical device is still 18.
+    pending = engine.rooms.pending["climate.trv_b"]
+    assert hass.states.get("climate.trv_b").attributes["temperature"] == 21
+    assert sleepy.physical_target == 18
+    assert len(pending.commands) == 1
+    await engine.async_data_changed()  # A normal trigger cannot confirm the optimistic value.
+    await hass.async_block_till_done()
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    assert len(sleepy.sent) == 1
+    if lost:
+        await sleepy.wake(lose_commands=True)
+    await sleepy.stale()  # 21 -> 18 foreign report must reach the stale guard.
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    assert pending.observed == 18
+    assert not engine.store.data.overrides
+    if lost:
+        await advance(hass, freezer, 10)
+        assert pending.retries == 1
+        assert len(sleepy.queue) == 1
+        assert sleepy.queue[0].data["temperature"] == 21
+        assert not engine.store.data.overrides
+    await sleepy.wake()
+    assert sleepy.physical_target == 21
+    assert "climate.trv_b" not in engine.rooms.pending
+    assert not engine.store.data.overrides and not engine.rooms.problems
+    await engine.async_stop(unloading=False)
+
+
+async def test_provisional_report_can_be_confirmed_by_retry_readback(hass, freezer):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    sleepy = SleepyTRV(hass, "climate.trv_b", optimistic=True)
+    await advance(hass, freezer, 10)
+    assert "climate.trv_b" in engine.rooms.pending
+    count = len(sleepy.sent)
+    await advance(hass, freezer, 10)  # The retry check sees the target in HA, as specified.
+    assert "climate.trv_b" not in engine.rooms.pending
+    assert len(sleepy.sent) == count
+    await engine.async_stop(unloading=False)
+
+
+async def test_foreign_confirmation_drops_all_older_commands(hass, freezer):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    sleepy = SleepyTRV(hass, "climate.trv_a", optimistic=True)
+    for target in (22, 23, 24):
+        await engine.rooms.async_set_override(room.id, target, source="card")
+        await engine.async_recalculate(apply_rooms=True)
+        await hass.async_block_till_done()
+    pending = engine.rooms.pending["climate.trv_a"]
+    assert [command.target for command in pending.commands] == [22, 23, 24]
+    sleepy.report(
+        22, context=sleepy.sent[0].context
+    )  # An older optimistic echo is provisional too.
+    await hass.async_block_till_done()
+    assert [command.target for command in pending.commands] == [22, 23, 24]
+    assert engine.store.data.overrides[0].target == 24
+    sleepy.report(23)  # Foreign device report confirms 23, including older 22.
+    await hass.async_block_till_done()
+    assert [command.target for command in pending.commands] == [24]
+    assert pending.observed == 23
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    await engine.async_stop(unloading=False)
+
+
+async def test_off_attribute_update_keeps_pending_heat_command(hass, freezer):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    report(hass, "climate.trv_a", 21, mode="off")
+    await hass.async_block_till_done()
+    assert "climate.trv_a" not in engine.rooms.pending
+    sleepy = SleepyTRV(hass, "climate.trv_a")
+    await engine.async_data_changed()  # Next trigger must restore heat, with equal target.
+    await hass.async_block_till_done()
+    assert len(sleepy.queue) == 1
+    assert sleepy.queue[0].data == {
+        "entity_id": "climate.trv_a",
+        "temperature": 21,
+        "hvac_mode": "heat",
+    }
+    pending = engine.rooms.pending["climate.trv_a"]
+    state = hass.states.get("climate.trv_a")
+    hass.states.async_set("climate.trv_a", "off", {**state.attributes, "current_temperature": 16})
+    await hass.async_block_till_done()
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    assert pending.cancel is not None
+    await advance(hass, freezer, 10)
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    assert pending.retries == 1  # Equal temperature while still off is not heat confirmation.
+    await sleepy.wake()
+    assert hass.states.get("climate.trv_a").state == "heat"
+    assert "climate.trv_a" not in engine.rooms.pending
+    # A new transition into off is still a pause even while a different target is pending.
+    await engine.rooms.async_set_override(room.id, 23)
+    await engine.async_recalculate(apply_rooms=True)
+    await hass.async_block_till_done()
+    assert "climate.trv_a" in engine.rooms.pending
+    report(hass, "climate.trv_a", 21, mode="off")
+    await hass.async_block_till_done()
+    assert "climate.trv_a" not in engine.rooms.pending
+    await engine.async_stop(unloading=False)
+
+
+async def test_boundary_reschedules_after_room_apply_exception(hass, freezer):
+    from unittest.mock import patch
+
+    engine, room, calls = await build_rooms(
+        hass, freezer, blocks=(Block("00:00", 18), Block("06:00", 21), Block("07:00", 19))
+    )
+    with patch.object(engine.rooms, "_write", side_effect=RuntimeError("test failure")):
+        await advance(hass, freezer, 10)
+    assert engine.rooms._timer is not None
+    assert not calls
+    await advance(hass, freezer, 3600)
+    assert len(calls) == 2
+    assert all(call.data["temperature"] == 19 for call in calls)
+    await engine.async_stop(unloading=False)
+
+
+async def test_null_hvac_modes_does_not_break_apply_or_reschedule(hass, freezer):
+    engine, room, calls = await build_rooms(hass, freezer)
+    state = hass.states.get("climate.trv_a")
+    hass.states.async_set("climate.trv_a", "off", {**state.attributes, "hvac_modes": None})
+    await hass.async_block_till_done()
+    await advance(hass, freezer, 10)
+    assert len(calls) == 2
+    assert "hvac_mode" not in calls[0].data
+    assert engine.rooms._timer is not None
+    await engine.async_stop(unloading=False)
+
+
+async def test_apply_now_sync_off_includes_knob_override_for_all_trvs(hass, freezer):
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer, sync=False)
+    await advance(hass, freezer, 10)
+    sleepy = SleepyTRV(hass, "climate.trv_b")
+    report(hass, "climate.trv_a", 23)
+    await hass.async_block_till_done()
+    assert engine.store.data.overrides[0].target == 23
+    assert not sleepy.queue
+    await engine.async_recalculate(apply_rooms=True, force=True)
+    await hass.async_block_till_done()
+    assert [call.data["temperature"] for call in sleepy.queue] == [23]
+    await sleepy.wake()
+    assert sleepy.physical_target == 23
+    assert hass.states.get("climate.trv_a").attributes["temperature"] == 23
+    await engine.async_stop(unloading=False)
+
+
+async def test_normal_trigger_preserves_pending_and_exhausted_retry_budgets(hass, freezer):
+    engine, room, calls = await build_rooms(hass, freezer, respond=False)
+    await advance(hass, freezer, 10)
+    pending = engine.rooms.pending["climate.trv_a"]
+    pending.retries = 2
+    before = len(calls)
+    await engine.async_data_changed()  # Same desired target: wait for existing retry.
+    await hass.async_block_till_done()
+    assert len(calls) == before
+    assert engine.rooms.pending["climate.trv_a"] is pending and pending.retries == 2
+    for _ in range(4):
+        await advance(hass, freezer, 10)  # Both TRVs exhaust their retry budgets.
+    assert engine.rooms.problems == set(room.trvs)
+    before = len(calls)
+    await engine.async_data_changed()  # Normal triggers must not silently restart retries.
+    await hass.async_block_till_done()
+    assert len(calls) == before and not engine.rooms.pending
+    assert engine.rooms.problems == set(room.trvs)
+    await engine.rooms.async_set_override(
+        room.id, 23
+    )  # A changed desired target gets a new budget.
+    await engine.async_recalculate(apply_rooms=True)
+    await hass.async_block_till_done()
+    assert len(calls) == before + 2
+    assert not engine.rooms.problems
+    assert all(pending.retries == 0 for pending in engine.rooms.pending.values())
+    await engine.async_stop(unloading=False)
+
+
+async def test_knob_equal_to_schedule_without_override_does_not_save_store(hass, freezer):
+    from unittest.mock import patch
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    # Represent an independent device state just before returning its knob to schedule.
+    engine._state_unsubscribe()
+    engine._state_unsubscribe = None
+    report(hass, "climate.trv_a", 23)
+    await hass.async_block_till_done()
+    engine._watch_trvs()
+    assert not engine.store.data.overrides
+    with patch.object(engine.store, "async_update", wraps=engine.store.async_update) as save:
+        report(hass, "climate.trv_a", 21)
+        await hass.async_block_till_done()
+        save.assert_not_awaited()
+    assert not engine.store.data.overrides
     await engine.async_stop(unloading=False)
