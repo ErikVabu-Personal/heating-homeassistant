@@ -13,8 +13,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .demand import available_temperature
-from .schedule import Room, schedule_at, until_next_change
-from .storage import Override, bounded
+from .schedule import Room, Week, schedule_at, until_next_change
+from .storage import Override, bounded, room_week
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,8 +48,10 @@ class RoomController:
         self.pending: dict[str, Pending] = {}
         self.problems: set[str] = set()
         self._timer = None
-        self._profiles = {room.id: room.profile_id for room in self.store.data.rooms}
-        self._profile_data = {profile.id: profile for profile in self.store.data.profiles}
+        self._active_id = self.store.data.active_schedule_id
+        self._weeks = {
+            room.id: room_week(self.store.data, room.id).days for room in self.store.data.rooms
+        }
 
     @property
     def zone(self) -> ZoneInfo:
@@ -62,10 +64,8 @@ class RoomController:
             raise ServiceValidationError("Unknown room") from exc
 
     def schedule(self, room: Room, now: datetime | None = None):
-        profile = next(
-            profile for profile in self.store.data.profiles if profile.id == room.profile_id
-        )
-        return schedule_at(profile, now or dt_util.utcnow(), self.zone)
+        week = room_week(self.store.data, room.id)
+        return schedule_at(Week("Room week", week.days), now or dt_util.utcnow(), self.zone)
 
     def desired(
         self, room: Room, now: datetime | None = None, *, without_override=False
@@ -74,7 +74,7 @@ class RoomController:
         data = self.store.data
         if not room.enabled or data.mode.value == "manual":
             return None
-        if data.mode.value == "summer":
+        if data.mode.value == "off":
             return data.settings.frost_temperature
         if not without_override:
             override = next(
@@ -119,10 +119,7 @@ class RoomController:
                 minutes=minutes if minutes is not None else settings.override_minutes
             )
         else:
-            profile = next(
-                profile for profile in self.store.data.profiles if profile.id == room.profile_id
-            )
-            until = until_next_change(profile, now, self.zone)
+            until = self.schedule(room, now).until_next_change
         override = Override(room_id, target, until, source, selected_kind)
         await self.store.async_update(
             lambda data: replace(
@@ -209,7 +206,7 @@ class RoomController:
                 return (
                     None  # Stale/optimistic value; retry corrects a real turn back in this window.
                 )
-        if target == previous or self.store.data.mode.value not in ("auto", "away"):
+        if target == previous or self.store.data.mode.value not in ("schedule", "away"):
             return None
         self._cancel_pending(trv)
         self._clear_problem(trv)
@@ -220,44 +217,43 @@ class RoomController:
             await self.async_set_override(room.id, target, source="trv")
         return room.id
 
-    async def async_apply(self, *, force: bool = False, room_id: str | None = None) -> None:
+    async def async_apply(
+        self, *, force: bool = False, room_id: str | None = None, room_ids: set[str] | None = None
+    ) -> None:
         if self.hass.state is not CoreState.running:
             return
         try:
             now = dt_util.utcnow()
-            changed_profiles = {
-                room.id
-                for room in self.store.data.rooms
-                if room.id in self._profiles and self._profiles[room.id] != room.profile_id
+            weeks = {
+                room.id: room_week(self.store.data, room.id).days for room in self.store.data.rooms
             }
-            profiles = {profile.id: profile for profile in self.store.data.profiles}
+            switched = self._active_id != self.store.data.active_schedule_id
             edited = {
-                key
-                for key, profile in profiles.items()
-                if key in self._profile_data and profile.days != self._profile_data[key].days
+                key for key, days in weeks.items() if switched or self._weeks.get(key) != days
             }
-            room_profiles = {room.id: room.profile_id for room in self.store.data.rooms}
             surviving = tuple(
                 replace(
                     item,
-                    until=until_next_change(profiles[room_profiles[item.room_id]], now, self.zone),
+                    until=until_next_change(Week("Room week", weeks[item.room_id]), now, self.zone),
                 )
-                if item.kind == "next_block" and room_profiles.get(item.room_id) in edited
+                if item.kind == "next_block" and item.room_id in edited
                 else item
                 for item in self.store.data.overrides
-                if item.until.astimezone(UTC) > now and item.room_id not in changed_profiles
+                if item.until.astimezone(UTC) > now
             )
             if surviving != self.store.data.overrides:
                 await self.store.async_update(lambda data: replace(data, overrides=surviving))
-            self._profiles = room_profiles
-            self._profile_data = profiles
+            self._active_id = self.store.data.active_schedule_id
+            self._weeks = weeks
             active = {trv for room in self.store.data.rooms if room.enabled for trv in room.trvs}
             for trv in set(self.pending) | self.problems:
                 if trv not in active or self.store.data.mode.value == "manual":
                     self._cancel_pending(trv)
                     self._clear_problem(trv)
             for room in self.store.data.rooms:
-                if room_id is not None and room.id != room_id:
+                if (room_id is not None and room.id != room_id) or (
+                    room_ids is not None and room.id not in room_ids
+                ):
                     continue
                 desired = self.desired(room, now)
                 override = next(
@@ -268,7 +264,7 @@ class RoomController:
                     and override is not None
                     and override.source == "trv"
                     and not self.store.data.settings.sync_rooms_on_knob_change
-                    and self.store.data.mode.value != "summer"
+                    and self.store.data.mode.value != "off"
                 ):
                     continue
                 for trv in room.trvs:

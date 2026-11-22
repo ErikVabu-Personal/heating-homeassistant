@@ -4,19 +4,74 @@ import asyncio
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .const import DOMAIN
-from .schedule import Block, Day, Profile, Room, validate_profile, validate_rooms
+from .schedule import Block, Day, Room, Week, new_id, validate_week
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-MODES = ("auto", "away", "summer", "manual")
+STORE_MINOR = 4
+MODES = ("schedule", "away", "off", "manual")
+MODE_ALIASES = {"auto": "schedule", "summer": "off"}
+MODE_INPUTS = (*MODES, *MODE_ALIASES)
+
+
+def canonical_mode(value: str) -> str:
+    return MODE_ALIASES.get(value, value)
+
+
+@dataclass(frozen=True)
+class RoomWeek:
+    room_id: str
+    days: tuple[Day, ...]
+
+
+@dataclass(frozen=True)
+class Schedule:
+    name: str
+    rooms: tuple[RoomWeek, ...] = ()
+    id: str = field(default_factory=new_id)
+
+
+def default_days() -> tuple[Day, ...]:
+    from .schedule import WEEKDAYS
+
+    return tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
+
+
+def active_schedule(data):
+    return next(item for item in data.schedules if item.id == data.active_schedule_id)
+
+
+def room_week(data, room_id):
+    return next(item for item in active_schedule(data).rooms if item.room_id == room_id)
+
+
+def seed_room(data, room, copy_from=None):
+    if copy_from is not None and not any(item.id == copy_from for item in data.rooms):
+        raise ValueError("Unknown room to copy weeks from")
+    schedules = tuple(
+        replace(
+            schedule,
+            rooms=(
+                *schedule.rooms,
+                RoomWeek(
+                    room.id,
+                    next(item.days for item in schedule.rooms if item.room_id == copy_from)
+                    if copy_from is not None
+                    else default_days(),
+                ),
+            ),
+        )
+        for schedule in data.schedules
+    )
+    return replace(data, rooms=(*data.rooms, room), schedules=schedules)
 
 
 @dataclass(frozen=True)
@@ -49,7 +104,8 @@ class Override:
 class HeatingData:
     settings: Settings = Settings()
     mode: Mode = Mode()
-    profiles: tuple[Profile, ...] = ()
+    schedules: tuple[Schedule, ...] = (Schedule("Winter", id="winter"),)
+    active_schedule_id: str = "winter"
     rooms: tuple[Room, ...] = ()
     overrides: tuple[Override, ...] = ()
     shadow: bool = True
@@ -91,14 +147,49 @@ def validate_data(data: HeatingData) -> None:
         raise ValueError("Invalid mode or mode expiration")
     if data.mode.until is not None:
         aware(data.mode.until)
-    for profile in data.profiles:
-        if not profile.id or not isinstance(profile.name, str):
-            raise ValueError("Invalid profile identity")
-        validate_profile(profile)
-    validate_rooms(data.rooms, data.profiles)
+    if not data.schedules or data.active_schedule_id not in {item.id for item in data.schedules}:
+        raise ValueError("An active schedule is required")
+    if len({item.id for item in data.schedules}) != len(data.schedules):
+        raise ValueError("Schedule IDs must be unique")
+    names = []
+    room_ids = {room.id for room in data.rooms}
+    if len(room_ids) != len(data.rooms):
+        raise ValueError("Room IDs must be unique")
+    for schedule in data.schedules:
+        if (
+            not isinstance(schedule.id, str)
+            or not schedule.id
+            or not isinstance(schedule.name, str)
+            or not schedule.name.strip()
+        ):
+            raise ValueError("Schedule names must be non-empty")
+        names.append(schedule.name.strip().casefold())
+        if (
+            len(schedule.rooms) != len(room_ids)
+            or {week.room_id for week in schedule.rooms} != room_ids
+        ):
+            raise ValueError("Every schedule needs exactly one week for every room")
+        for week in schedule.rooms:
+            validate_week(Week("Room week", week.days))
+    if len(set(names)) != len(names):
+        raise ValueError("Schedule names must be unique")
+    assigned = set()
+    for room in data.rooms:
+        if (
+            not room.trvs
+            or len(set(room.trvs)) != len(room.trvs)
+            or assigned.intersection(room.trvs)
+        ):
+            raise ValueError("Each room needs distinct physical thermostats")
+        assigned.update(room.trvs)
     rooms = {room.id: room for room in data.rooms}
     for room in data.rooms:
-        if not room.id or not isinstance(room.name, str) or type(room.enabled) is not bool:
+        if (
+            not isinstance(room.id, str)
+            or not room.id
+            or not isinstance(room.name, str)
+            or type(room.enabled) is not bool
+        ):
             raise ValueError("Invalid room")
         if room.area_id is not None and not isinstance(room.area_id, str):
             raise ValueError("Invalid room area")
@@ -125,14 +216,21 @@ def to_json(data: HeatingData) -> dict[str, Any]:
             "value": data.mode.value,
             "until": data.mode.until.isoformat() if data.mode.until else None,
         },
-        "profiles": {
-            profile.id: {
-                "name": profile.name,
-                "days": {
-                    day.weekday: [asdict(block) for block in day.blocks] for day in profile.days
+        "active_schedule_id": data.active_schedule_id,
+        "schedules": {
+            schedule.id: {
+                "name": schedule.name,
+                "rooms": {
+                    week.room_id: {
+                        "days": {
+                            day.weekday: [asdict(block) for block in day.blocks]
+                            for day in week.days
+                        }
+                    }
+                    for week in schedule.rooms
                 },
             }
-            for profile in data.profiles
+            for schedule in data.schedules
         },
         "rooms": {
             room.id: {
@@ -155,13 +253,33 @@ def to_json(data: HeatingData) -> dict[str, Any]:
     }
 
 
+def _decode_schedule(key, value):
+    if set(value) != {"name", "rooms"}:
+        raise ValueError("Unexpected schedule fields")
+    weeks = []
+    for room_id, week in value["rooms"].items():
+        if set(week) != {"days"}:
+            raise ValueError("Unexpected room-week fields")
+        weeks.append(
+            RoomWeek(
+                room_id,
+                tuple(
+                    Day(day, tuple(Block(**block) for block in blocks))
+                    for day, blocks in week["days"].items()
+                ),
+            )
+        )
+    return Schedule(value["name"], tuple(weeks), id=key)
+
+
 def from_json(raw: dict[str, Any]) -> HeatingData:
     """Decode and validate as one operation; malformed storage is never partly loaded."""
     try:
         if not isinstance(raw, dict) or set(raw) - {
             "settings",
             "mode",
-            "profiles",
+            "schedules",
+            "active_schedule_id",
             "rooms",
             "overrides",
             "shadow",
@@ -176,17 +294,13 @@ def from_json(raw: dict[str, Any]) -> HeatingData:
                 mode["value"],
                 datetime.fromisoformat(mode["until"]) if mode["until"] is not None else None,
             ),
-            profiles=tuple(
-                Profile(
-                    value["name"],
-                    tuple(
-                        Day(day, tuple(Block(**block) for block in blocks))
-                        for day, blocks in value["days"].items()
-                    ),
-                    id=key,
-                )
-                for key, value in raw.get("profiles", {}).items()
+            schedules=tuple(
+                _decode_schedule(key, value)
+                for key, value in raw.get(
+                    "schedules", {"winter": {"name": "Winter", "rooms": {}}}
+                ).items()
             ),
+            active_schedule_id=raw.get("active_schedule_id", "winter"),
             rooms=tuple(
                 Room(**{**value, "trvs": tuple(value["trvs"])}, id=key)
                 for key, value in raw.get("rooms", {}).items()
@@ -217,11 +331,13 @@ class HeatingStore:
 
         class VersionedStore(Store):
             async def _async_migrate_func(self, old_major, old_minor, raw):
-                if old_major != 1:
+                if old_major != 1 or old_minor > STORE_MINOR:
                     raise ValueError("Unsupported heating Store version")
-                return to_json(from_json(raw))
+                from .migration import migrate_store
 
-        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=3)
+                return to_json(from_json(migrate_store(raw)))
+
+        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=STORE_MINOR)
         self._lock = asyncio.Lock()
         self.data = HeatingData()
 
@@ -235,9 +351,11 @@ class HeatingStore:
                 envelope = json.loads(path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 return HeatingData()
-            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > 3:
+            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > STORE_MINOR:
                 raise ValueError("Unsupported heating Store version")
-            return from_json(envelope["data"])
+            from .migration import migrate_store
+
+            return from_json(migrate_store(envelope["data"]))
 
         return await hass.async_add_executor_job(read)
 

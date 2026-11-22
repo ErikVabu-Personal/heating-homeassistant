@@ -1,8 +1,9 @@
 import "../src/card";
-import { profilePayload } from "../src/schedule";
+import { schedulePayload } from "../src/schedule";
+import { defaultWeek } from "../src/format";
 import { fixture } from "./fixture";
 import type { CentralHeatingCard } from "../src/card";
-import type { Hass, Message, Room, Profile, Status } from "../src/types";
+import type { Hass, Message, Room, Schedule, Status } from "../src/types";
 let status = fixture();
 let nextId = 1;
 const listeners = new Set<(value: Status) => void>();
@@ -13,24 +14,65 @@ const connectionEvents = {
 function notify() {
   for (const listener of listeners) listener(structuredClone(status));
 }
+const demoNow = new Date("2026-11-22T17:30:00Z");
+function roomPlan(value: Status, id: string) {
+  const week =
+    value.configuration.schedules[value.configuration.active_schedule_id].rooms[
+      id
+    ];
+  const names = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const today = names[demoNow.getUTCDay()];
+  const minute = demoNow.getUTCHours() * 60 + demoNow.getUTCMinutes();
+  const target = [...week.days[today]]
+    .reverse()
+    .find(
+      (block) =>
+        Number(block.start.slice(0, 2)) * 60 + Number(block.start.slice(3)) <=
+        minute,
+    )!.target;
+  for (let offset = 0; offset <= 7; offset++) {
+    const day = new Date(
+      Date.UTC(
+        demoNow.getUTCFullYear(),
+        demoNow.getUTCMonth(),
+        demoNow.getUTCDate() + offset,
+      ),
+    );
+    for (const block of week.days[names[day.getUTCDay()]]) {
+      const at = new Date(day);
+      at.setUTCHours(
+        Number(block.start.slice(0, 2)),
+        Number(block.start.slice(3)),
+      );
+      if (at > demoNow && block.target !== target)
+        return {
+          target,
+          next_change: at.toISOString(),
+          next_target: block.target,
+        };
+    }
+  }
+  return { target, next_change: null, next_target: null };
+}
 function recalculate() {
   status.global.shadow = status.configuration.shadow;
   status.global.mode = status.configuration.mode;
   for (const [id, room] of Object.entries(status.configuration.rooms)) {
     const override = status.configuration.overrides[id];
+    const plan = roomPlan(status, id);
     const old = status.rooms[id];
     const mode = status.configuration.mode.value;
     const activeOverride =
-      mode === "auto" || mode === "away" ? override : undefined;
+      mode === "schedule" || mode === "away" ? override : undefined;
     const target =
       mode === "manual"
         ? (old?.target ?? Object.values(old?.trvs ?? {})[0] ?? 18)
-        : mode === "summer"
+        : mode === "off"
           ? status.configuration.settings.frost_temperature
           : (activeOverride?.target ??
             (mode === "away"
               ? status.configuration.settings.away_temperature
-              : 21));
+              : plan.target));
     status.rooms[id] = {
       ...old,
       name: room.name,
@@ -44,16 +86,15 @@ function recalculate() {
           status.configuration.settings.hysteresis,
       sync_problem: old?.sync_problem ?? false,
       override_until: activeOverride?.until ?? null,
-      next_change: old?.next_change ?? null,
-      next_target: old?.next_target ?? null,
+      next_change: plan.next_change,
+      next_target: plan.next_target,
     };
   }
   status.global.demand_count = Object.values(status.rooms).filter(
     (room) => room.demanding,
   ).length;
   status.global.command.heat =
-    status.global.demand_count > 0 &&
-    status.configuration.mode.value !== "summer";
+    status.global.demand_count > 0 && status.configuration.mode.value !== "off";
 }
 function respond(message: Message): unknown {
   const command = message.type.replace("central_heating/", "");
@@ -66,58 +107,114 @@ function respond(message: Message): unknown {
             { entry_id: "demo_entry_b", title: "Demo boiler B" },
           ],
         };
+  const next = structuredClone(status);
   let savedId: string | undefined;
   if (command === "mode/set") {
-    status.configuration.mode = {
+    if (message.schedule_id) {
+      if (!next.configuration.schedules[String(message.schedule_id)])
+        throw new Error("Unknown schedule");
+      next.configuration.active_schedule_id = String(message.schedule_id);
+    }
+    next.configuration.mode = {
       value: message.mode as Status["configuration"]["mode"]["value"],
       until: message.until as string | null,
     };
   } else if (command === "override/set") {
-    const room = String(message.room_id);
-    status.configuration.overrides[room] = {
+    const id = String(message.room_id);
+    next.configuration.overrides[id] = {
       target: Number(message.temperature),
       until:
         message.kind === "next_block"
-          ? (status.rooms[room].next_change ??
-            new Date(Date.now() + 7 * 86400000).toISOString())
+          ? (next.rooms[id].next_change ??
+            new Date(demoNow.getTime() + 7 * 86400000).toISOString())
           : new Date(
-              Date.now() + Number(message.minutes ?? 120) * 60000,
+              demoNow.getTime() + Number(message.minutes ?? 120) * 60000,
             ).toISOString(),
       source: "card",
       kind: message.kind === "next_block" ? "next_block" : "duration",
     };
   } else if (command === "override/clear")
-    delete status.configuration.overrides[String(message.room_id)];
+    delete next.configuration.overrides[String(message.room_id)];
   else if (command === "room/save") {
-    const room = message.room as Room & { id?: string };
-    savedId = room.id ?? `room_${nextId++}`;
-    const copy = { ...room };
-    delete copy.id;
-    status.configuration.rooms[savedId] = copy;
-  } else if (command === "room/delete") {
-    delete status.configuration.rooms[String(message.room_id)];
-    delete status.rooms[String(message.room_id)];
-    delete status.configuration.overrides[String(message.room_id)];
-  } else if (command === "profile/save") {
-    const profile = message.profile as Profile & { id?: string };
-    profilePayload(profile, profile.id);
-    savedId = profile.id ?? `profile_${nextId++}`;
-    const copy = { ...profile };
-    delete copy.id;
-    status.configuration.profiles[savedId] = copy;
-  } else if (command === "profile/delete") {
+    const value = message.room as Room & {
+      id?: string;
+      copy_week_from_room?: string;
+    };
     if (
-      Object.values(status.configuration.rooms).some(
-        (r) => r.profile_id === message.profile_id,
+      value.copy_week_from_room &&
+      !next.configuration.rooms[value.copy_week_from_room]
+    )
+      throw new Error("Unknown room");
+    savedId = value.id ?? `room_${nextId++}`;
+    const copy = { ...value };
+    delete copy.id;
+    delete copy.copy_week_from_room;
+    if (!value.id)
+      for (const schedule of Object.values(next.configuration.schedules))
+        schedule.rooms[savedId] = value.copy_week_from_room
+          ? structuredClone(schedule.rooms[value.copy_week_from_room])
+          : defaultWeek();
+    next.configuration.rooms[savedId] = copy;
+  } else if (command === "room/delete") {
+    const id = String(message.room_id);
+    delete next.configuration.rooms[id];
+    delete next.rooms[id];
+    delete next.configuration.overrides[id];
+    for (const schedule of Object.values(next.configuration.schedules))
+      delete schedule.rooms[id];
+  } else if (command === "schedule/save") {
+    const value = message.schedule as Schedule & { id?: string };
+    schedulePayload(value, value.id);
+    if (
+      Object.entries(next.configuration.schedules).some(
+        ([id, s]) =>
+          id !== value.id &&
+          s.name.trim().toLowerCase() === value.name.trim().toLowerCase(),
       )
     )
-      throw new Error("Profile is used by a room.");
-    delete status.configuration.profiles[String(message.profile_id)];
+      throw new Error("Schedule names must be unique.");
+    savedId = value.id ?? `schedule_${nextId++}`;
+    next.configuration.schedules[savedId] = {
+      name: value.name,
+      rooms: structuredClone(value.rooms),
+    };
+  } else if (command === "schedule/activate") {
+    const id = String(message.schedule_id);
+    if (!next.configuration.schedules[id]) throw new Error("Unknown schedule");
+    next.configuration.active_schedule_id = id;
+  } else if (command === "schedule/delete") {
+    const id = String(message.schedule_id);
+    if (
+      id === next.configuration.active_schedule_id ||
+      Object.keys(next.configuration.schedules).length <= 1
+    )
+      throw new Error("The active or last schedule cannot be deleted.");
+    delete next.configuration.schedules[id];
   } else if (command === "settings/save") {
-    Object.assign(status.configuration.settings, message.settings ?? {});
+    Object.assign(next.configuration.settings, message.settings ?? {});
     if (message.shadow !== undefined)
-      status.configuration.shadow = Boolean(message.shadow);
+      next.configuration.shadow = Boolean(message.shadow);
   } else throw new Error("Unknown demo command");
+  for (const [id, override] of Object.entries(next.configuration.overrides)) {
+    if (override.kind !== "next_block" || !next.configuration.rooms[id])
+      continue;
+    const before =
+      status.configuration.schedules[status.configuration.active_schedule_id]
+        .rooms[id];
+    const after =
+      next.configuration.schedules[next.configuration.active_schedule_id].rooms[
+        id
+      ];
+    if (
+      status.configuration.active_schedule_id !==
+        next.configuration.active_schedule_id ||
+      JSON.stringify(before) !== JSON.stringify(after)
+    )
+      override.until =
+        roomPlan(next, id).next_change ??
+        new Date(demoNow.getTime() + 7 * 86400000).toISOString();
+  }
+  status = next;
   recalculate();
   notify();
   return {
@@ -198,6 +295,14 @@ document.querySelector("#width")!.addEventListener("change", (e) => {
 document.querySelector<HTMLSelectElement>("#width")!.value = width;
 document.querySelector("#reset")!.addEventListener("click", () => {
   status = fixture();
+  card.modeDraft = undefined;
+  card.modeUntilDraft = undefined;
+  card.scheduleDraft = undefined;
+  const editor =
+    card.shadowRoot?.querySelector<import("../src/schedules").HeatingSchedules>(
+      "heating-schedules",
+    );
+  if (editor) editor.draft = undefined;
   hass.connection.connected = true;
   connectionEvents.ready.forEach((listener) => listener());
   notify();

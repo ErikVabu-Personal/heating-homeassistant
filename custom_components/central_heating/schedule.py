@@ -1,4 +1,4 @@
-"""Pure weekly profile validation and local-wall-clock schedule calculations."""
+"""Pure weekly week validation and local-wall-clock schedule calculations."""
 
 import re
 from dataclasses import dataclass, field
@@ -28,7 +28,7 @@ class Day:
 
 
 @dataclass(frozen=True)
-class Profile:
+class Week:
     name: str
     days: tuple[Day, ...]
     id: str = field(default_factory=new_id)
@@ -38,7 +38,6 @@ class Profile:
 class Room:
     name: str
     trvs: tuple[str, ...]
-    profile_id: str
     id: str = field(default_factory=new_id)
     enabled: bool = True
     area_id: str | None = None
@@ -92,33 +91,11 @@ def validate_day(day: Day) -> None:
         raise ValueError("Each day must start at 00:00")
 
 
-def validate_profile(profile: Profile) -> None:
-    if len(profile.days) != 7 or {day.weekday for day in profile.days} != set(WEEKDAYS):
-        raise ValueError("A profile needs each weekday exactly once")
-    for day in profile.days:
+def validate_week(week: Week) -> None:
+    if len(week.days) != 7 or {day.weekday for day in week.days} != set(WEEKDAYS):
+        raise ValueError("A week needs each weekday exactly once")
+    for day in week.days:
         validate_day(day)
-
-
-def validate_rooms(rooms: tuple[Room, ...], profiles: tuple[Profile, ...]) -> None:
-    """Validate all associations, including disabled rooms, atomically before a save."""
-    profile_ids = {profile.id for profile in profiles}
-    if len(profile_ids) != len(profiles) or len({room.id for room in rooms}) != len(rooms):
-        raise ValueError("IDs must be unique")
-    assigned: set[str] = set()
-    for room in rooms:
-        if not room.trvs:
-            raise ValueError("A room needs at least one TRV")
-        if room.profile_id not in profile_ids:
-            raise ValueError("Room profile does not exist")
-        for trv in room.trvs:
-            if trv in assigned:
-                raise ValueError("A TRV belongs to at most one room")
-            assigned.add(trv)
-
-
-def validate_profile_deletion(profile_id: str, rooms: tuple[Room, ...]) -> None:
-    if any(room.profile_id == profile_id for room in rooms):
-        raise ValueError("A profile in use cannot be deleted")
 
 
 def resolve_start(day: date, start: str, zone: ZoneInfo) -> datetime:
@@ -133,7 +110,7 @@ def resolve_start(day: date, start: str, zone: ZoneInfo) -> datetime:
         local += timedelta(minutes=1)
 
 
-def schedule_at(profile: Profile, now: datetime, zone: ZoneInfo) -> ScheduleResult:
+def schedule_at(week: Week, now: datetime, zone: ZoneInfo) -> ScheduleResult:
     """Return the active block and strictly next start, comparing absolute instants.
 
     An aware caller timestamp may use any timezone. Ambiguous starts occur once,
@@ -141,10 +118,10 @@ def schedule_at(profile: Profile, now: datetime, zone: ZoneInfo) -> ScheduleResu
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Schedule time must be timezone-aware")
-    validate_profile(profile)
+    validate_week(week)
     instant = now.astimezone(UTC)
     today = now.astimezone(zone).date()
-    days = {day.weekday: day for day in profile.days}
+    days = {day.weekday: day for day in week.days}
     starts: list[BlockStart] = []
     # Cover skipped dates and two weeks of transitions: a spring gap can hide
     # the only distinct target for one week, deferring it to the next week.
@@ -179,6 +156,6 @@ def schedule_at(profile: Profile, now: datetime, zone: ZoneInfo) -> ScheduleResu
     return ScheduleResult(current, last_start(following), change, expiry)
 
 
-def until_next_change(profile: Profile, now: datetime, zone: ZoneInfo) -> datetime:
+def until_next_change(week: Week, now: datetime, zone: ZoneInfo) -> datetime:
     """Expire at the next different target, or seven elapsed days for a constant week."""
-    return schedule_at(profile, now, zone).until_next_change
+    return schedule_at(week, now, zone).until_next_change

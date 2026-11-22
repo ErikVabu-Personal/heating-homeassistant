@@ -9,7 +9,7 @@ set_mode:
       required: true
       selector:
         select:
-          options: [auto, away, summer, manual]
+          options: [schedule, away, "off", manual, auto, summer]
     until:
       selector:
         datetime:
@@ -60,3 +60,15 @@ apply_now:
       selector:
         config_entry:
           integration: central_heating
+
+set_schedule:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: central_heating
+    schedule:
+      required: true
+      selector:
+        text:

@@ -116,12 +116,16 @@ class RoomClimate(HeatingEntity, ClimateEntity):
                 for item in self.engine.store.data.overrides
                 if item.room_id == self.room_id
                 and item.until > dt_util.utcnow()
-                and self.engine.store.data.mode.value in ("auto", "away")
+                and self.engine.store.data.mode.value in ("schedule", "away")
             ),
             None,
         )
         return {
-            "profile": self.room.profile_id,
+            "schedule": next(
+                item.name
+                for item in self.engine.store.data.schedules
+                if item.id == self.engine.store.data.active_schedule_id
+            ),
             "scheduled_target": plan.current.block.target,
             "next_change": plan.next_change.at.isoformat() if plan.next_change else None,
             "next_target": plan.next_target,

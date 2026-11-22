@@ -11,21 +11,19 @@ from custom_components.central_heating.schedule import (
     WEEKDAYS,
     Block,
     Day,
-    Profile,
     Room,
+    Week,
     resolve_start,
     schedule_at,
     until_next_change,
     validate_day,
-    validate_profile,
-    validate_profile_deletion,
-    validate_rooms,
+    validate_week,
 )
 
 
-def profile() -> Profile:
-    return Profile(
-        "Profile A", tuple(Day(day, (Block("00:00", 18), Block("06:30", 21))) for day in WEEKDAYS)
+def profile() -> Week:
+    return Week(
+        "Week A", tuple(Day(day, (Block("00:00", 18), Block("06:30", 21))) for day in WEEKDAYS)
     )
 
 
@@ -97,8 +95,8 @@ def test_invalid_weekday_rejected(day):
 
 def test_profile_accepts_all_days_in_any_order():
     value = profile()
-    validate_profile(value)
-    validate_profile(replace(value, days=value.days[::-1]))
+    validate_week(value)
+    validate_week(replace(value, days=value.days[::-1]))
 
 
 @pytest.mark.parametrize("variant", ["empty", "missing", "duplicate", "extra", "invalid-day"])
@@ -112,54 +110,13 @@ def test_profile_requires_exactly_seven_distinct_valid_days(variant):
         "invalid-day": (*value.days[:-1], replace(value.days[-1], weekday="other")),
     }[variant]
     with pytest.raises(ValueError):
-        validate_profile(replace(value, days=days))
+        validate_week(replace(value, days=days))
 
 
 def test_profile_checks_every_day():
     value = profile()
     with pytest.raises(ValueError):
-        validate_profile(replace(value, days=(*value.days[:-1], Day("sun", ()))))
-
-
-def test_room_membership_and_deletion():
-    value = profile()
-    room = Room("Room A", ("climate.trv_a", "climate.trv_b"), value.id)
-    validate_rooms((room,), (value,))
-    validate_rooms((), (value,))
-    validate_profile_deletion(value.id, ())
-    with pytest.raises(ValueError, match="in use"):
-        validate_profile_deletion(value.id, (room,))
-    with pytest.raises(ValueError, match="in use"):
-        validate_profile_deletion(value.id, (replace(room, enabled=False),))
-
-
-@pytest.mark.parametrize(
-    "variant",
-    [
-        "empty",
-        "within-room",
-        "across-rooms",
-        "disabled",
-        "missing-profile",
-        "duplicate-room-id",
-        "duplicate-profile-id",
-    ],
-)
-def test_invalid_rooms_rejected(variant):
-    value = profile()
-    a = Room("Room A", ("climate.trv_a",), value.id)
-    b = Room("Room B", ("climate.trv_b",), value.id)
-    rooms, profiles = {
-        "empty": ((replace(a, trvs=()),), (value,)),
-        "within-room": ((replace(a, trvs=("climate.trv_a", "climate.trv_a")),), (value,)),
-        "across-rooms": ((a, replace(b, trvs=a.trvs)), (value,)),
-        "disabled": ((a, replace(b, trvs=a.trvs, enabled=False)), (value,)),
-        "missing-profile": ((a,), ()),
-        "duplicate-room-id": ((a, replace(b, id=a.id)), (value,)),
-        "duplicate-profile-id": ((a,), (value, value)),
-    }[variant]
-    with pytest.raises(ValueError):
-        validate_rooms(rooms, profiles)
+        validate_week(replace(value, days=(*value.days[:-1], Day("sun", ()))))
 
 
 def test_names_do_not_define_identity():
@@ -167,9 +124,9 @@ def test_names_do_not_define_identity():
     assert first.name == second.name
     assert first.id != second.id
     assert UUID(first.id).version == UUID(second.id).version == 4
-    room = Room("Room A", ("climate.trv_a",), first.id)
+    room = Room("Room A", ("climate.trv_a",))
     assert UUID(room.id).version == 4
-    assert replace(first, name="Profile B").id == first.id
+    assert replace(first, name="Week B").id == first.id
     assert replace(room, name="Room B").id == room.id
 
 
@@ -178,7 +135,7 @@ def test_schedule_records_are_frozen():
         (profile(), "name"),
         (Day("mon", ()), "weekday"),
         (Block("00:00", 20), "start"),
-        (Room("Room A", ("climate.trv_a",), "profile_a"), "name"),
+        (Room("Room A", ("climate.trv_a",)), "name"),
     ]:
         with pytest.raises(FrozenInstanceError):
             setattr(value, attribute, "changed")
@@ -199,8 +156,8 @@ def test_ambiguous_start_uses_first_occurrence():
     assert result.utcoffset().total_seconds() == 7200
 
 
-def weekly(blocks: tuple[Block, ...]) -> Profile:
-    return Profile("Profile A", tuple(Day(day, blocks) for day in WEEKDAYS))
+def weekly(blocks: tuple[Block, ...]) -> Week:
+    return Week("Week A", tuple(Day(day, blocks) for day in WEEKDAYS))
 
 
 @pytest.mark.parametrize(
@@ -227,8 +184,8 @@ def test_current_next_and_override_expiry(now, current, next_start):
 
 
 def test_weekday_targets_and_sunday_to_monday_rollover():
-    value = Profile(
-        "Profile A",
+    value = Week(
+        "Week A",
         tuple(Day(day, (Block("00:00", 18 + index / 2),)) for index, day in enumerate(WEEKDAYS)),
     )
     zone = ZoneInfo("Europe/Berlin")
@@ -307,7 +264,7 @@ def test_spring_collision_last_scheduled_block_wins(explicit_three, query_zone):
         blocks += (Block("03:00", 22),)
     blocks += (Block("04:00", 23),)
     value = weekly(blocks)
-    validate_profile(value)  # DST collisions do not invalidate a profile.
+    validate_week(value)  # DST collisions do not invalidate a profile.
     zone = ZoneInfo("Europe/Berlin")
     instant = datetime(2026, 3, 29, 1, tzinfo=UTC)
     before = schedule_at(
@@ -361,7 +318,7 @@ def test_override_skips_midnight_and_equal_target_blocks_until_next_change():
 def test_next_change_searches_across_days_and_week_boundary():
     days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
     days = (*days[:2], Day("wed", (Block("00:00", 18), Block("07:00", 21))), *days[3:])
-    value = Profile("Profile A", days)
+    value = Week("Week A", days)
     zone = ZoneInfo("Europe/Berlin")
     now = datetime(2026, 1, 11, 23, tzinfo=zone)  # Sunday
     result = schedule_at(value, now, zone)
@@ -407,8 +364,8 @@ def test_next_change_uses_first_autumn_occurrence():
 
 def test_skipped_date_uses_following_days_effective_block():
     zone = ZoneInfo("Pacific/Apia")
-    value = Profile(
-        "Profile A",
+    value = Week(
+        "Week A",
         tuple(Day(day, (Block("00:00", 18 + index / 2),)) for index, day in enumerate(WEEKDAYS)),
     )
     now = datetime(2011, 12, 29, 23, 59, tzinfo=zone)
@@ -429,7 +386,7 @@ def test_schedule_lookup_rejects_invalid_profile():
 def test_nonconstant_week_next_change_survives_a_week_with_extra_dst_hour():
     days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
     days = (*days[:-1], Day("sun", (Block("00:00", 18), Block("03:00", 21), Block("03:05", 18))))
-    value = Profile("Profile A", days)
+    value = Week("Week A", days)
     zone = ZoneInfo("Europe/Berlin")
     now = datetime(2026, 10, 18, 3, 6, tzinfo=zone)
     result = schedule_at(value, now, zone)
@@ -440,7 +397,7 @@ def test_nonconstant_week_next_change_survives_a_week_with_extra_dst_hour():
 def test_next_change_finds_the_week_after_a_dst_gap_hides_this_weeks_change():
     days = tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS)
     days = (*days[:-1], Day("sun", (Block("00:00", 18), Block("02:30", 21), Block("03:00", 18))))
-    value = Profile("Profile A", days)
+    value = Week("Week A", days)
     zone = ZoneInfo("Europe/Berlin")
     now = datetime(2026, 3, 23, 12, tzinfo=zone)
     result = schedule_at(value, now, zone)

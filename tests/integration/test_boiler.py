@@ -12,18 +12,21 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.central_heating.boiler.diyless_mqtt import DiylessAdapter
 from custom_components.central_heating.const import ADAPTER, DEFAULT_PREFIX, DOMAIN
 from custom_components.central_heating.engine import HeatingEngine
-from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Profile, Room
+from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Room, Week
 from custom_components.central_heating.storage import HeatingStore, Mode
+from tests.schedules import seed
 
 pytestmark = pytest.mark.integration
 
 
 async def build_engine(hass, *, shadow=False):
     store = HeatingStore(hass, "entry_a")
-    profile = Profile("Profile A", tuple(Day(day, (Block("00:00", 21),)) for day in WEEKDAYS))
-    room = Room("Room A", ("climate.trv_a",), profile.id)
+    profile = Week("Week A", tuple(Day(day, (Block("00:00", 21),)) for day in WEEKDAYS))
+    room = Room("Room A", ("climate.trv_a",))
     await store.async_update(
-        lambda data: replace(data, profiles=(profile,), rooms=(room,), shadow=shadow)
+        lambda data: replace(
+            data, schedules=(seed(profile, (room,)),), rooms=(room,), shadow=shadow
+        )
     )
     hass.states.async_set("climate.trv_a", "heat", {"current_temperature": 18, "temperature": 21})
     ticks = {"now": 0.0}
@@ -57,7 +60,7 @@ async def test_exact_mqtt_start_change_keepalive_and_six_hour_source(hass, mqtt_
     await engine.async_recalculate()
     assert len(messages(mqtt_mock)) == 3
     mqtt_mock.async_publish.reset_mock()
-    await engine.async_set_mode("summer")
+    await engine.async_set_mode("off")
     assert messages(mqtt_mock)[-1] == (f"{DEFAULT_PREFIX}/mode", "off", 0, False)
     mqtt_mock.async_publish.reset_mock()
     ticks["now"] = 21600
@@ -120,7 +123,7 @@ async def test_away_until_returns_to_auto_and_disabled_room_is_ignored(hass, mqt
         )
     )
     await engine.async_recalculate()
-    assert engine.store.data.mode.value == "auto"
+    assert engine.store.data.mode.value == "schedule"
     assert engine.demand.demand_count == 0
 
 
@@ -184,7 +187,7 @@ async def test_entry_entities_start_manual_shadow_and_keep_settings(hass, mqtt_m
                 )
             ]
         )
-        == 10
+        == 11
     )
     await engine.async_settings(frost_temperature=8)
     assert engine.store.data.settings.frost_temperature == 8
@@ -384,10 +387,10 @@ async def test_entry_actions_ids_options_and_real_unload(hass, mqtt_mock):
     await hass.services.async_call(
         "select",
         "select_option",
-        {"entity_id": entity_id("select", "mode"), "option": "summer"},
+        {"entity_id": entity_id("select", "mode"), "option": "off"},
         blocking=True,
     )
-    assert entry.runtime_data.store.data.mode.value == "summer"
+    assert entry.runtime_data.store.data.mode.value == "off"
     await hass.services.async_call(
         "switch", "turn_off", {"entity_id": entity_id("switch", "shadow")}, blocking=True
     )
@@ -435,7 +438,7 @@ async def test_store_minor_migration_and_entry_removal(hass, hass_storage):
     store = HeatingStore(hass, entry.entry_id)
     await store.async_load()
     assert store.data.shadow and store.data.settings.frost_temperature == 8
-    assert hass_storage[f"{DOMAIN}.{entry.entry_id}"]["minor_version"] == 3
+    assert hass_storage[f"{DOMAIN}.{entry.entry_id}"]["minor_version"] == 4
     DiylessAdapter(hass, entry.entry_id, DEFAULT_PREFIX)._unavailable()
     await async_remove_entry(hass, entry)
     assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage

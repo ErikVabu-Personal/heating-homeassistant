@@ -1,4 +1,4 @@
-export type Mode = "auto" | "away" | "summer" | "manual";
+export type Mode = "schedule" | "away" | "off" | "manual";
 export interface Settings {
   frost_temperature: number;
   hysteresis: number;
@@ -8,14 +8,16 @@ export interface Settings {
   sync_rooms_on_knob_change: boolean;
   retry_seconds: number;
 }
-export interface Profile {
-  name: string;
+export interface Week {
   days: Record<string, { start: string; target: number }[]>;
+}
+export interface Schedule {
+  name: string;
+  rooms: Record<string, Week>;
 }
 export interface Room {
   name: string;
   trvs: string[];
-  profile_id: string;
   area_id: string | null;
   enabled: boolean;
 }
@@ -28,7 +30,8 @@ export interface Override {
 export interface Configuration {
   settings: Settings;
   mode: { value: Mode; until: string | null };
-  profiles: Record<string, Profile>;
+  schedules: Record<string, Schedule>;
+  active_schedule_id: string;
   rooms: Record<string, Room>;
   overrides: Record<string, Override>;
   shadow: boolean;

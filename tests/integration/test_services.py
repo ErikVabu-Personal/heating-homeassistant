@@ -10,8 +10,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.central_heating.const import ADAPTER, DEFAULT_PREFIX, DOMAIN
 from custom_components.central_heating.diagnostics import async_get_config_entry_diagnostics
-from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Profile, Room
-from custom_components.central_heating.storage import HeatingStore
+from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Room, Week
+from custom_components.central_heating.storage import HeatingStore, seed_room
+from tests.schedules import seed
 
 pytestmark = pytest.mark.integration
 
@@ -23,17 +24,19 @@ async def setup_entry(hass):
         data={"name": "Boiler A", "adapter": ADAPTER, "prefix": DEFAULT_PREFIX},
     )
     entry.add_to_hass(hass)
-    profile = Profile(
-        "Profile A", tuple(Day(day, (Block("00:00", 18), Block("07:00", 21))) for day in WEEKDAYS)
+    profile = Week(
+        "Week A", tuple(Day(day, (Block("00:00", 18), Block("07:00", 21))) for day in WEEKDAYS)
     )
-    room = Room("Room A", ("climate.trv_a",), profile.id)
+    room = Room("Room A", ("climate.trv_a",))
     hass.states.async_set(
         "climate.trv_a",
         "heat",
         {"current_temperature": 20, "temperature": 21, "hvac_modes": ["heat"]},
     )
     store = HeatingStore(hass, entry.entry_id)
-    await store.async_update(lambda data: replace(data, profiles=(profile,), rooms=(room,)))
+    await store.async_update(
+        lambda data: replace(data, schedules=(seed(profile, (room,)),), rooms=(room,))
+    )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     entity_id = er.async_get(hass).async_get_entity_id(
@@ -71,7 +74,7 @@ async def test_services_room_climate_and_diagnostics(hass, mqtt_mock):
     )
     assert engine.store.data.overrides[0].target == 23
     await hass.services.async_call(
-        DOMAIN, "set_mode", {"config_entry_id": entry.entry_id, "mode": "summer"}, blocking=True
+        DOMAIN, "set_mode", {"config_entry_id": entry.entry_id, "mode": "off"}, blocking=True
     )
     assert engine.command.heat is False
     await hass.services.async_call(
@@ -89,7 +92,7 @@ async def test_services_room_climate_and_diagnostics(hass, mqtt_mock):
 @pytest.mark.parametrize(
     "service,changes",
     [
-        ("set_mode", {"mode": "auto", "until": "2027-01-01T00:00:00+00:00"}),
+        ("set_mode", {"mode": "schedule", "until": "2027-01-01T00:00:00+00:00"}),
         ("set_override", {"temperature": 31}),
         ("set_override", {"temperature": 20.1}),
         ("clear_override", {"room": "climate.unrelated"}),
@@ -113,8 +116,8 @@ async def test_invalid_service_write_changes_nothing(hass, mqtt_mock, service, c
 async def test_new_room_entity_is_discovered_after_store_update(hass, mqtt_mock):
     entry, room, climate = await setup_entry(hass)
     engine = entry.runtime_data
-    other = Room("Room B", ("climate.trv_b",), room.profile_id)
-    await engine.store.async_update(lambda data: replace(data, rooms=(*data.rooms, other)))
+    other = Room("Room B", ("climate.trv_b",))
+    await engine.store.async_update(lambda data: seed_room(data, other))
     await engine.async_data_changed()
     await hass.async_block_till_done()
     other_entity = er.async_get(hass).async_get_entity_id(
@@ -156,20 +159,19 @@ async def test_room_climate_actions_names_override_visibility_and_constant_week(
         await entity.async_set_temperature(temperature=22.1)
     await entity.async_set_temperature(temperature=22)
     assert entity.extra_state_attributes["override_until"] is None  # manual
-    await engine.async_set_mode("auto")
+    await engine.async_set_mode("schedule")
     assert entity.extra_state_attributes["override_until"] is not None
-    await engine.async_set_mode("summer")
+    await engine.async_set_mode("off")
     assert entity.extra_state_attributes["override_until"] is None
     await engine.async_set_mode("away")
     assert entity.extra_state_attributes["override_until"] is not None
     expired = replace(engine.store.data.overrides[0], until=dt_util.utcnow() - timedelta(seconds=1))
     await engine.store.async_update(lambda data: replace(data, overrides=(expired,)))
     assert entity.extra_state_attributes["override_until"] is None
-    constant = replace(
-        engine.store.data.profiles[0],
-        days=tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS),
+    constant = Week("Constant", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
+    await engine.store.async_update(
+        lambda data: replace(data, schedules=(seed(constant, (room,)),))
     )
-    await engine.store.async_update(lambda data: replace(data, profiles=(constant,)))
     assert entity.extra_state_attributes["next_change"] is None
     assert entity.extra_state_attributes["next_target"] is None
     old = hass.states.get("climate.trv_a")
@@ -244,14 +246,14 @@ async def test_service_registration_once_and_apply_now_dispatch(hass, mqtt_mock)
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.parametrize("mode", ["auto", "away", "summer", "manual"])
+@pytest.mark.parametrize("mode", ["schedule", "away", "off", "manual"])
 async def test_mode_service_and_select_keep_internal_values(hass, mqtt_mock, mode):
     from custom_components.central_heating.select import ModeSelect
 
     entry, room, climate = await setup_entry(hass)
     entity = ModeSelect(entry, "mode")
     assert entity.translation_key == "mode"
-    assert entity.options == ["auto", "away", "summer", "manual"]
+    assert entity.options == ["schedule", "away", "off", "manual"]
     await hass.services.async_call(
         DOMAIN, "set_mode", {"config_entry_id": entry.entry_id, "mode": mode}, blocking=True
     )

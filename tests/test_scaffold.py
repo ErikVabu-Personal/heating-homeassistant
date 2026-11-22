@@ -62,7 +62,7 @@ def test_manifest_hassfest_order_and_issue_tracker():
 
 
 def test_all_internal_select_options_have_approved_display_translations():
-    expected = {"auto": "Schedule", "away": "Away", "summer": "Heating off", "manual": "Manual"}
+    expected = {"schedule": "Schedule", "away": "Away", "off": "Off", "manual": "Manual"}
     for file in ("strings.json", "translations/en.json"):
         data = json.loads((COMPONENT / file).read_text(encoding="utf-8"))
         assert data["entity"]["select"]["mode"]["state"] == expected

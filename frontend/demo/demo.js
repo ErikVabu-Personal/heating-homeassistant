@@ -115,9 +115,8 @@
             .map((part) => [part.type, part.value]));
         return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
     }
-    function defaultProfile(name = "Default profile") {
+    function defaultWeek() {
         return {
-            name,
             days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
                 day,
                 [{ start: "00:00", target: 18 }],
@@ -147,6 +146,20 @@
                 return clock;
         }
         throw new Error("Enter a valid time on the five-minute grid.");
+    }
+    /** Format a wall-clock Away picker value in HA's zone, adding a date beyond today. */
+    function awayUntilLabel(value, timeZone, locale, now = new Date()) {
+        const clock = scheduleTime(value.slice(11, 16), locale);
+        if (value.slice(0, 10) ===
+            localDateTime(now.toISOString(), timeZone).slice(0, 10))
+            return clock;
+        const date = new Intl.DateTimeFormat(locale?.language, {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            timeZone: "UTC",
+        }).format(new Date(`${value.slice(0, 10)}T12:00:00Z`));
+        return `${date} ${clock}`;
     }
 
     const styles = i$3 `
@@ -509,7 +522,7 @@
     padding-top: 24px;
     border-top: 1px solid var(--divider-color);
   }
-  .profile-row {
+  .week-row {
     padding: 18px 0;
     border-bottom: 1px solid var(--divider-color);
     display: flex;
@@ -706,18 +719,23 @@
             previous = at;
         }
     }
-    function profilePayload(profile, id) {
-        if (!profile.name.trim() || profile.name.length > 200)
-            throw new Error("Enter a profile name of 1–200 characters.");
-        if (Object.keys(profile.days).length !== 7 ||
-            weekdays.some((day) => !profile.days[day]))
-            throw new Error("A profile needs all seven days.");
+    function weekPayload(week) {
+        if (Object.keys(week.days).length !== 7 ||
+            weekdays.some((day) => !week.days[day]))
+            throw new Error("A week needs all seven days.");
         for (const day of weekdays)
-            validateDay(profile.days[day]);
+            validateDay(week.days[day]);
+        return { days: structuredClone(week.days) };
+    }
+    function schedulePayload(schedule, id) {
+        if (!schedule.name.trim() || schedule.name.length > 200)
+            throw new Error("Enter a schedule name of 1–200 characters.");
+        for (const week of Object.values(schedule.rooms))
+            weekPayload(week);
         return {
             ...(id ? { id } : {}),
-            name: profile.name.trim(),
-            days: structuredClone(profile.days),
+            name: schedule.name.trim(),
+            rooms: structuredClone(schedule.rooms),
         };
     }
     function splitBlock(blocks, at) {
@@ -745,12 +763,12 @@
         const start = clock(Math.max(min, Math.min(max, snap(at))));
         return blocks.map((b, i) => (i === index ? { ...b, start } : { ...b }));
     }
-    function copyDay(profile, from, to) {
-        const result = structuredClone(profile);
+    function copyDay(week, from, to) {
+        const result = structuredClone(week);
         for (const day of to) {
             if (!weekdays.includes(day))
                 throw new Error("Invalid weekday.");
-            result.days[day] = structuredClone(profile.days[from]);
+            result.days[day] = structuredClone(week.days[from]);
         }
         return result;
     }
@@ -763,26 +781,32 @@
             super(...arguments);
             this.writable = false;
             this.selected = "";
+            this.selectedRoom = "";
             this.error = "";
             this.saving = false;
             this.block = null;
             this.copyFrom = null;
             this.deleting = false;
+            this.creating = false;
+            this.copyRooms = false;
             this.baseline = "";
-            this.timeInputs = new Map();
             this.entryId = "";
+            this.timeInputs = new Map();
         }
         static { this.properties = {
             status: { attribute: false },
             hass: { attribute: false },
             writable: { type: Boolean },
             selected: { state: true },
+            selectedRoom: { state: true },
             draft: { state: true },
             error: { state: true },
             saving: { state: true },
             block: { state: true },
             copyFrom: { state: true },
             deleting: { state: true },
+            creating: { state: true },
+            copyRooms: { state: true },
         }; }
         static { this.styles = [
             styles,
@@ -790,13 +814,13 @@
       :host {
         container-type: inline-size;
       }
-      .profile-tools {
+      .week-tools {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
         margin: 16px 0;
       }
-      .profile-tools select {
+      .week-tools select {
         width: auto;
         flex: 1;
         min-width: 130px;
@@ -932,11 +956,53 @@
       .unsaved {
         color: var(--warning-color);
       }
-      .profile-meta {
+      .week-meta {
         margin: 12px 0;
       }
-      .profile-meta p {
+      .week-meta p {
         margin: 4px 0;
+      }
+      .schedule-tools {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 16px 0;
+      }
+      .schedule-tools select {
+        flex: 1;
+        min-width: 140px;
+        width: auto;
+      }
+      .schedule-layout {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr);
+        gap: 20px;
+      }
+      .room-picker {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-self: start;
+      }
+      .room-picker button {
+        text-align: left;
+      }
+      .room-picker [aria-pressed="true"] {
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+        font-weight: 700;
+      }
+      .week-editor {
+        min-width: 0;
+      }
+      @container (max-width:600px) {
+        .schedule-layout {
+          grid-template-columns: 1fr;
+        }
+        .room-picker {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
       }
       .toolbar {
         flex-wrap: wrap;
@@ -951,7 +1017,7 @@
         .block-row button {
           grid-column: 2;
         }
-        .profile-tools button {
+        .week-tools button {
           flex: 1;
         }
         .edit-panel .form-grid {
@@ -965,47 +1031,96 @@
                 this.entryId = this.status?.config_entry_id ?? "";
                 this.draft = undefined;
                 this.selected = "";
+                this.selectedRoom = "";
                 this.block = null;
                 this.error = "";
                 this.copyFrom = null;
                 this.deleting = false;
                 this.saving = false;
+                this.creating = false;
+                this.copyRooms = false;
+                this.timeInputs.clear();
             }
-            if (!this.draft && this.status) {
-                const id = Object.keys(this.status.configuration.profiles)[0];
-                if (id)
-                    this.load(id);
-            }
+            if (!this.draft && this.status)
+                this.load(this.status.configuration.active_schedule_id);
+        }
+        get week() {
+            return this.draft?.rooms[this.selectedRoom] ?? defaultWeek();
         }
         get dirty() {
             return (!!this.draft &&
                 (this.timeInputs.size > 0 || JSON.stringify(this.draft) !== this.baseline));
         }
         load(id) {
-            const source = this.status?.configuration.profiles[id];
+            const source = this.status?.configuration.schedules[id];
             if (!source)
                 return;
             this.timeInputs.clear();
             this.selected = id;
             this.draft = structuredClone(source);
             this.baseline = JSON.stringify(this.draft);
+            if (!this.status?.configuration.rooms[this.selectedRoom])
+                this.selectedRoom =
+                    Object.keys(this.status?.configuration.rooms ?? {})[0] ?? "";
             this.error = "";
             this.block = null;
             this.deleting = false;
         }
-        newProfile(copy = false) {
-            this.timeInputs.clear();
-            this.selected = "";
-            this.draft =
-                copy && this.draft
-                    ? structuredClone(this.draft)
-                    : defaultProfile("New profile");
-            if (copy)
-                this.draft.name += " copy";
-            this.baseline = "";
+        async save() {
+            if (!this.draft || !this.writable || this.saving || !this.saveSchedule)
+                return;
+            const entry = this.entryId;
+            this.saving = true;
             this.error = "";
-            this.block = null;
-            this.deleting = false;
+            try {
+                if (this.timeInputs.size)
+                    throw new Error("Correct invalid start times before saving.");
+                const payload = schedulePayload(this.draft, this.selected || undefined);
+                const id = await this.saveSchedule(payload);
+                if (entry !== this.entryId)
+                    return;
+                this.selected = id || this.selected;
+                this.draft = { name: payload.name, rooms: payload.rooms };
+                this.baseline = JSON.stringify(this.draft);
+            }
+            catch (e) {
+                if (entry === this.entryId)
+                    this.error = e instanceof Error ? e.message : String(e);
+            }
+            finally {
+                if (entry === this.entryId)
+                    this.saving = false;
+            }
+        }
+        async showCopy(day) {
+            this.copyFrom = day;
+            await this.updateComplete;
+            this.renderRoot.querySelector("#copy-day")?.showModal();
+        }
+        async showDialog(kind) {
+            if (kind === "create")
+                this.creating = true;
+            else
+                this.copyRooms = true;
+            await this.updateComplete;
+            this.renderRoot
+                .querySelector(kind === "create" ? "#create-schedule" : "#copy-rooms")
+                ?.showModal();
+        }
+        async activate() {
+            if (!this.activateSchedule || !this.writable || this.saving || this.dirty)
+                return;
+            this.saving = true;
+            this.error = "";
+            try {
+                await this.activateSchedule(this.selected);
+            }
+            catch (e) {
+                this.error = e instanceof Error ? e.message : String(e);
+            }
+            finally {
+                this.saving = false;
+            }
         }
         clearDayInputs(day) {
             for (const key of this.timeInputs.keys())
@@ -1015,12 +1130,20 @@
         change(day, blocks) {
             if (!this.draft || !this.writable || this.saving)
                 return;
-            if (blocks.length !== this.draft.days[day].length) {
+            if (blocks.length !== this.week.days[day].length) {
                 this.clearDayInputs(day);
                 if (this.block?.day === day)
                     this.block = null;
             }
-            this.draft = { ...this.draft, days: { ...this.draft.days, [day]: blocks } };
+            this.draft = {
+                ...this.draft,
+                rooms: {
+                    ...this.draft.rooms,
+                    [this.selectedRoom]: {
+                        days: { ...this.week.days, [day]: blocks },
+                    },
+                },
+            };
             this.error = "";
         }
         editTime(day, index, event) {
@@ -1030,7 +1153,7 @@
                 const at = minutes(parseScheduleTime(input.value, this.hass?.locale));
                 if (at % 5)
                     throw new Error("Times must be on the five-minute grid.");
-                const dayBlocks = this.draft.days[day];
+                const dayBlocks = this.week.days[day];
                 const previous = dayBlocks[index - 1]?.start ?? "00:00";
                 const next = dayBlocks[index + 1]?.start ?? "24:00";
                 const before = next === "24:00" ? 1440 : minutes(next);
@@ -1058,37 +1181,6 @@
             const weight = Math.max(12, Math.min(65, (target - 5) * 2.2));
             return `color-mix(in srgb, var(--${target < 19 ? "primary" : "warning"}-color) ${weight}%, var(--card-background-color))`;
         }
-        async save() {
-            if (!this.draft || !this.writable || this.saving || !this.saveProfile)
-                return;
-            const entry = this.entryId;
-            this.saving = true;
-            this.error = "";
-            try {
-                if (this.timeInputs.size)
-                    throw new Error("Correct invalid start times before saving.");
-                const payload = profilePayload(this.draft, this.selected || undefined);
-                const id = await this.saveProfile(payload);
-                if (entry !== this.entryId)
-                    return;
-                this.selected = id || this.selected;
-                this.draft = { name: payload.name, days: payload.days };
-                this.baseline = JSON.stringify(this.draft);
-            }
-            catch (e) {
-                if (entry === this.entryId)
-                    this.error = e instanceof Error ? e.message : String(e);
-            }
-            finally {
-                if (entry === this.entryId)
-                    this.saving = false;
-            }
-        }
-        async showCopy(day) {
-            this.copyFrom = day;
-            await this.updateComplete;
-            this.renderRoot.querySelector("#copy-day")?.showModal();
-        }
         drag(event, day, index) {
             if (!this.writable || this.saving)
                 return;
@@ -1099,7 +1191,7 @@
             const move = (e) => {
                 if (e.pointerId !== event.pointerId)
                     return;
-                this.change(day, moveBoundary(this.draft.days[day], index, ((e.clientX - rect.left) / rect.width) * 1440));
+                this.change(day, moveBoundary(this.week.days[day], index, ((e.clientX - rect.left) / rect.width) * 1440));
             };
             const end = (e) => {
                 if (e.pointerId !== event.pointerId)
@@ -1115,235 +1207,286 @@
             handle.addEventListener("lostpointercapture", end);
         }
         render() {
-            const p = this.draft;
-            const profiles = this.status?.configuration.profiles ?? {};
-            const rooms = Object.entries(this.status?.configuration.rooms ?? {}).filter(([, r]) => r.profile_id === this.selected);
+            const p = this.draft, week = this.week;
+            const schedules = this.status?.configuration.schedules ?? {};
+            const rooms = Object.entries(this.status?.configuration.rooms ?? {});
             const disabled = !this.writable || this.saving;
-            const next = rooms
-                .map(([id]) => this.status?.rooms[id]?.next_change)
-                .filter((x) => !!x)
-                .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+            const active = this.selected === this.status?.configuration.active_schedule_id;
+            const protectedDelete = active || Object.keys(schedules).length <= 1;
+            const next = this.status?.rooms[this.selectedRoom]?.next_change;
             return b `<div class="toolbar">
         <div>
-          <h2>Weekly schedules</h2>
-          <p class="muted">A comfortable rhythm for every day.</p>
+          <h2>Schedules</h2>
+          <p class="muted">One plan for the house. A week for every room.</p>
         </div>
         ${this.dirty
             ? b `<span class="badge unsaved" role="status"
               >Unsaved changes</span
             >`
-            : b `<span class="badge">Saved profiles</span>`}
+            : A}
+        ${active ? b `<span class="badge">Active schedule</span>` : A}
       </div>
-      <div class="profile-tools">
+      <div class="schedule-tools">
         <select
-          aria-label="Heating profile"
+          aria-label="Schedule"
           .value=${this.selected}
           ?disabled=${this.dirty || this.saving}
           @change=${(e) => this.load(e.target.value)}
         >
           ${!this.selected
-            ? b `<option value="">New profile</option>`
+            ? b `<option value="">New schedule</option>`
             : A}
-          ${Object.entries(profiles).map(([id, p]) => b `<option value=${id}>${p.name}</option>`)}
+          ${Object.entries(schedules).map(([id, s]) => b `<option value=${id} ?selected=${id === this.selected}>
+                ${s.name}
+              </option>`)}
         </select>
         <button
           ?disabled=${disabled || this.dirty}
-          @click=${() => this.newProfile()}
+          @click=${() => this.showDialog("create")}
         >
-          Create profile
+          Create
         </button>
         <button
-          ?disabled=${disabled || this.dirty || !p}
-          @click=${() => this.newProfile(true)}
+          ?disabled=${disabled || !p}
+          @click=${() => this.renderRoot
+            .querySelector("#schedule-name")
+            ?.focus()}
         >
-          Copy profile
+          Rename
+        </button>
+        <button
+          ?disabled=${disabled || this.dirty || !this.selected || active}
+          @click=${() => this.activate()}
+        >
+          Activate
+        </button>
+        <button
+          class="danger"
+          ?disabled=${disabled || this.dirty || !this.selected}
+          @click=${() => {
+            this.deleting = true;
+        }}
+        >
+          Delete
         </button>
       </div>
       ${p
-            ? b `<fieldset ?disabled=${disabled}>
-              <div class="form-grid">
-                <div class="field">
-                  <label for="profile-name">Profile name</label
-                  ><input
-                    id="profile-name"
-                    maxlength="200"
-                    .value=${p.name}
-                    @input=${(e) => {
+            ? b `<fieldset>
+              <div class="field">
+                <label for="schedule-name">Schedule name</label
+                ><input
+                  id="schedule-name"
+                  ?disabled=${disabled}
+                  maxlength="200"
+                  .value=${p.name}
+                  @input=${(e) => {
                 this.draft = {
                     ...p,
                     name: e.target.value,
                 };
             }}
-                  />
-                </div>
-                <div class="profile-meta">
-                  <p>
-                    <strong>Used by:</strong> ${rooms
-                .map(([, r]) => r.name)
-                .join(", ") || "No rooms assigned"}
-                  </p>
-                  <small
-                    >Next room change:
-                    ${next
-                ? time(next, this.hass?.config?.time_zone, this.hass?.locale)
-                : "No upcoming change"}</small
-                  >
-                </div>
+                />
               </div>
-              <div class="legend" aria-label="Temperature legend">
-                ${[10, 18, 21, 25].map((t) => b `<span
-                      ><span
-                        class="swatch"
-                        style=${`background:${this.color(t)}`}
-                      ></span
-                      >${temperature(t)}</span
-                    >`)}
-              </div>
-              <div class="week" aria-label="Weekly schedule grid">
-                <div class="axis">
-                  <span>00:00</span><span>06:00</span><span>12:00</span
-                  ><span>18:00</span><span>24:00</span>
+              <div class="schedule-layout">
+                <div class="room-picker" aria-label="Rooms in schedule">
+                  ${rooms.map(([id, room]) => b `<button
+                        aria-pressed=${this.selectedRoom === id}
+                        ?disabled=${this.timeInputs.size > 0}
+                        @click=${() => {
+                this.selectedRoom = id;
+                this.block = null;
+                this.timeInputs.clear();
+                this.error = "";
+            }}
+                      >
+                        ${room.name}
+                      </button>`)}
                 </div>
-                ${weekdays.map((day, i) => b `<div class="day">
-                      <span class="day-label">${dayNames[i]}</span>
-                      <div class="track">
-                        ${p.days[day].map((b$1, j) => {
-                const start = minutes(b$1.start), end = j + 1 < p.days[day].length
-                    ? minutes(p.days[day][j + 1].start)
-                    : 1440;
-                return b ` <button
-                              class="schedule-block"
-                              style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b$1.target)}`}
-                              aria-label=${`${dayNames[i]} ${b$1.start} to ${clock(end)} · ${temperature(b$1.target)}. Arrow keys change temperature.`}
-                              @click=${() => {
-                    this.block = { day, index: j };
-                }}
-                              @keydown=${(e) => {
-                    if ([
-                        "ArrowUp",
-                        "ArrowDown",
-                        "ArrowLeft",
-                        "ArrowRight",
-                    ].includes(e.key)) {
-                        e.preventDefault();
-                        this.change(day, p.days[day].map((x, k) => k === j
-                            ? {
-                                ...x,
-                                target: temperatureStep(x.target, [
-                                    "ArrowUp",
-                                    "ArrowRight",
-                                ].includes(e.key)
-                                    ? 1
-                                    : -1),
-                            }
-                            : x));
-                    }
-                }}
-                            >
-                              ${temperature(b$1.target)}
+                <div class="week-editor">
+                  <fieldset ?disabled=${disabled}>
+                    ${this.selectedRoom
+                ? b `<div class="toolbar">
+                            <div>
+                              <h3>
+                                ${this.status?.configuration.rooms[this.selectedRoom]?.name}
+                              </h3>
+                              <small
+                                >${active
+                    ? `Next change: ${time(next, this.hass?.config?.time_zone, this.hass?.locale)}`
+                    : "Activate this schedule to use these weeks."}</small
+                              >
+                            </div>
+                            <button @click=${() => this.showDialog("rooms")}>
+                              Copy this room’s week to…
                             </button>
-                            ${j
-                    ? b `<button
-                                  class="boundary"
-                                  style=${`left:${start / 14.4}%`}
-                                  aria-label=${`Move ${dayNames[i]} boundary at ${b$1.start}`}
-                                  @pointerdown=${(e) => this.drag(e, day, j)}
-                                  @keydown=${(e) => {
-                        if (["ArrowLeft", "ArrowRight"].includes(e.key)) {
+                          </div>
+                          <div class="legend" aria-label="Temperature legend">
+                            ${[10, 18, 21, 25].map((t) => b `<span
+                                  ><span
+                                    class="swatch"
+                                    style=${`background:${this.color(t)}`}
+                                  ></span
+                                  >${temperature(t)}</span
+                                >`)}
+                          </div>
+                          <div class="week" aria-label="Weekly schedule grid">
+                            <div class="axis">
+                              <span>00:00</span><span>06:00</span
+                              ><span>12:00</span><span>18:00</span
+                              ><span>24:00</span>
+                            </div>
+                            ${weekdays.map((day, i) => b `<div class="day">
+                                  <span class="day-label">${dayNames[i]}</span>
+                                  <div class="track">
+                                    ${week.days[day].map((b$1, j) => {
+                    const start = minutes(b$1.start), end = j + 1 < week.days[day].length
+                        ? minutes(week.days[day][j + 1].start)
+                        : 1440;
+                    return b ` <button
+                                          class="schedule-block"
+                                          style=${`left:${start / 14.4}%;width:${(end - start) / 14.4}%;background:${this.color(b$1.target)}`}
+                                          aria-label=${`${dayNames[i]} ${b$1.start} to ${clock(end)} · ${temperature(b$1.target)}. Arrow keys change temperature.`}
+                                          @click=${() => {
+                        this.block = { day, index: j };
+                    }}
+                                          @keydown=${(e) => {
+                        if ([
+                            "ArrowUp",
+                            "ArrowDown",
+                            "ArrowLeft",
+                            "ArrowRight",
+                        ].includes(e.key)) {
                             e.preventDefault();
-                            this.change(day, moveBoundary(p.days[day], j, start +
-                                (e.key === "ArrowRight" ? 5 : -5)));
+                            this.change(day, week.days[day].map((x, k) => k === j
+                                ? {
+                                    ...x,
+                                    target: temperatureStep(x.target, [
+                                        "ArrowUp",
+                                        "ArrowRight",
+                                    ].includes(e.key)
+                                        ? 1
+                                        : -1),
+                                }
+                                : x));
                         }
                     }}
-                                ></button>`
-                    : A}`;
-            })}
-                        <button
-                          class="split-time"
-                          aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
-                          @click=${(e) => this.attempt(() => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const at = e.detail === 0
-                    ? 720
-                    : ((e.clientX - rect.left) / rect.width) *
-                        1440;
-                this.change(day, splitBlock(p.days[day], at));
-            })}
-                        >
-                          + Tap timeline to split
-                        </button>
-                      </div>
-                    </div>`)}
-              </div>
-              ${this.blockEditor()}
-              <div class="day-list">
-                <h3>Edit times & copy days</h3>
-                <p class="muted">
-                  Five-minute times, half-degree temperatures. Each day starts
-                  at 00:00.
-                </p>
-                ${weekdays.map((day, i) => b `<details>
-                      <summary>
-                        ${dayNames[i]} · ${p.days[day].length} blocks
-                      </summary>
-                      ${p.days[day].map((b$1, j) => b `<div class="block-row">
-                            <div class="field">
-                              <label for=${`start-${day}-${j}`}
-                                >Start time</label
-                              ><input
-                                id=${`start-${day}-${j}`}
-                                aria-invalid=${this.timeInputs.has(`${day}-${j}`)}
-                                type="text"
-                                inputmode="text"
-                                .value=${this.timeInputs.get(`${day}-${j}`) ??
-                scheduleTime(b$1.start, this.hass?.locale)}
-                                ?disabled=${!j}
-                                @change=${(e) => this.editTime(day, j, e)}
-                              />
-                            </div>
-                            <div class="field">
-                              <label for=${`target-${day}-${j}`}
-                                >Temperature °C</label
-                              ><input
-                                id=${`target-${day}-${j}`}
-                                type="number"
-                                min="5"
-                                max="30"
-                                step="0.5"
-                                .value=${String(b$1.target)}
-                                @change=${(e) => this.change(day, p.days[day].map((x, k) => k === j
-                ? {
-                    ...x,
-                    target: Number(e.target
-                        .value),
-                }
-                : x))}
-                              />
-                            </div>
-                            <button
-                              ?disabled=${!j}
-                              @click=${() => {
-                this.change(day, removeBlock(p.days[day], j));
-                this.block = null;
-            }}
-                            >
-                              Remove<span class="sr-only">
-                                ${dayNames[i]} ${b$1.start}</span
-                              >
-                            </button>
-                          </div>`)}
-                      <div class="actions">
-                        <button
-                          @click=${() => this.attempt(() => {
-                this.change(day, splitBlock(p.days[day], minutes(p.days[day].at(-1).start) + 5));
-            })}
-                        >
-                          Add block</button
-                        ><button @click=${() => this.showCopy(day)}>
-                          Copy day to…
-                        </button>
-                      </div>
-                    </details>`)}
+                                        >
+                                          ${temperature(b$1.target)}
+                                        </button>
+                                        ${j
+                        ? b `<button
+                                              class="boundary"
+                                              style=${`left:${start / 14.4}%`}
+                                              aria-label=${`Move ${dayNames[i]} boundary at ${b$1.start}`}
+                                              @pointerdown=${(e) => this.drag(e, day, j)}
+                                              @keydown=${(e) => {
+                            if ([
+                                "ArrowLeft",
+                                "ArrowRight",
+                            ].includes(e.key)) {
+                                e.preventDefault();
+                                this.change(day, moveBoundary(week.days[day], j, start +
+                                    (e.key === "ArrowRight"
+                                        ? 5
+                                        : -5)));
+                            }
+                        }}
+                                            ></button>`
+                        : A}`;
+                })}
+                                    <button
+                                      class="split-time"
+                                      aria-label=${`Split ${dayNames[i]} at a point on the timeline`}
+                                      @click=${(e) => this.attempt(() => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const at = e.detail === 0
+                        ? 720
+                        : ((e.clientX - rect.left) /
+                            rect.width) *
+                            1440;
+                    this.change(day, splitBlock(week.days[day], at));
+                })}
+                                    >
+                                      + Tap timeline to split
+                                    </button>
+                                  </div>
+                                </div>`)}
+                          </div>
+                          ${this.blockEditor()}
+                          <div class="day-list">
+                            <h3>Edit times & copy days</h3>
+                            <p class="muted">
+                              Five-minute times, half-degree temperatures. Each
+                              day starts at 00:00.
+                            </p>
+                            ${weekdays.map((day, i) => b `<details>
+                                  <summary>
+                                    ${dayNames[i]} · ${week.days[day].length}
+                                    blocks
+                                  </summary>
+                                  ${week.days[day].map((b$1, j) => b `<div class="block-row">
+                                        <div class="field">
+                                          <label for=${`start-${day}-${j}`}
+                                            >Start time</label
+                                          ><input
+                                            id=${`start-${day}-${j}`}
+                                            aria-invalid=${this.timeInputs.has(`${day}-${j}`)}
+                                            type="text"
+                                            inputmode="text"
+                                            .value=${this.timeInputs.get(`${day}-${j}`) ??
+                    scheduleTime(b$1.start, this.hass?.locale)}
+                                            ?disabled=${!j}
+                                            @change=${(e) => this.editTime(day, j, e)}
+                                          />
+                                        </div>
+                                        <div class="field">
+                                          <label for=${`target-${day}-${j}`}
+                                            >Temperature °C</label
+                                          ><input
+                                            id=${`target-${day}-${j}`}
+                                            type="number"
+                                            min="5"
+                                            max="30"
+                                            step="0.5"
+                                            .value=${String(b$1.target)}
+                                            @change=${(e) => this.change(day, week.days[day].map((x, k) => k === j
+                    ? {
+                        ...x,
+                        target: Number(e.target.value),
+                    }
+                    : x))}
+                                          />
+                                        </div>
+                                        <button
+                                          ?disabled=${!j}
+                                          @click=${() => {
+                    this.change(day, removeBlock(week.days[day], j));
+                    this.block = null;
+                }}
+                                        >
+                                          Remove<span class="sr-only">
+                                            ${dayNames[i]} ${b$1.start}</span
+                                          >
+                                        </button>
+                                      </div>`)}
+                                  <div class="actions">
+                                    <button
+                                      @click=${() => this.attempt(() => {
+                    this.change(day, splitBlock(week.days[day], minutes(week.days[day].at(-1).start) + 5));
+                })}
+                                    >
+                                      Add block</button
+                                    ><button @click=${() => this.showCopy(day)}>
+                                      Copy day to…
+                                    </button>
+                                  </div>
+                                </details>`)}
+                          </div> `
+                : b `<div class="empty">
+                          Add a room to set up its week in every schedule.
+                        </div>`}
+                  </fieldset>
+                </div>
               </div>
             </fieldset>
             ${this.error
@@ -1351,73 +1494,61 @@
                 : A}
             <div class="actions">
               <button
-                class="danger"
-                ?disabled=${disabled || !this.selected || this.dirty}
-                @click=${() => {
-                this.deleting = true;
-            }}
-              >
-                Delete profile</button
-              ><button
                 ?disabled=${this.saving || !this.dirty}
-                @click=${() => {
-                const id = this.selected || Object.keys(profiles)[0];
-                if (id)
-                    this.load(id);
-                else {
-                    this.draft = undefined;
-                    this.baseline = "";
-                }
-            }}
+                @click=${() => this.load(this.selected ||
+                this.status.configuration.active_schedule_id)}
               >
                 Discard changes</button
               ><button
+                id="save-schedule"
                 class="primary"
-                id="save-profile"
                 ?disabled=${disabled || !this.dirty}
                 @click=${() => this.save()}
               >
-                ${this.saving ? "Saving…" : "Save profile"}
+                ${this.saving ? "Saving…" : "Save schedule"}
               </button>
             </div>
             ${this.deleting
                 ? b `<div class="delete-confirm" role="alert">
                   <h3>Delete ${p.name}?</h3>
-                  ${rooms.length
-                    ? b `<p>
-                        Cannot delete a profile used by:
-                        ${rooms.map(([, r]) => r.name).join(", ")}. Assign those
-                        rooms to another profile first.
-                      </p>`
-                    : b `<p>This removes the saved weekly profile.</p>`}
+                  <p>
+                    ${protectedDelete
+                    ? Object.keys(schedules).length <= 1
+                        ? "The last schedule cannot be deleted."
+                        : "The active schedule cannot be deleted. Activate another schedule first."
+                    : "This removes all room weeks in this schedule."}
+                  </p>
                   <div class="actions">
                     <button
                       @click=${() => {
                     this.deleting = false;
                 }}
                     >
-                      Keep profile</button
-                    >${!rooms.length
+                      Keep schedule</button
+                    >${!protectedDelete
                     ? b `<button
                           class="danger"
                           ?disabled=${disabled}
                           @click=${async () => {
-                        if (!this.deleteProfile || disabled)
+                        if (!this.deleteSchedule || disabled)
                             return;
+                        const entry = this.entryId;
                         this.saving = true;
-                        this.error = "";
                         try {
-                            await this.deleteProfile(this.selected);
-                            this.selected = "";
-                            this.draft = undefined;
-                            this.deleting = false;
+                            await this.deleteSchedule(this.selected);
+                            if (entry === this.entryId) {
+                                this.draft = undefined;
+                                this.deleting = false;
+                            }
                         }
                         catch (e) {
-                            this.error =
-                                e instanceof Error ? e.message : String(e);
+                            if (entry === this.entryId)
+                                this.error =
+                                    e instanceof Error ? e.message : String(e);
                         }
                         finally {
-                            this.saving = false;
+                            if (entry === this.entryId)
+                                this.saving = false;
                         }
                     }}
                         >
@@ -1427,16 +1558,14 @@
                   </div>
                 </div>`
                 : A} `
-            : b `<div class="empty">
-            No profiles yet. Create a profile to plan the week.
-          </div>`}
-      ${this.copyDialog()}`;
+            : A}
+      ${this.copyDialog()}${this.createDialog()}${this.copyRoomsDialog()}`;
         }
         blockEditor() {
             if (!this.block || !this.draft)
                 return A;
             const { day, index } = this.block;
-            const b$1 = this.draft.days[day][index];
+            const b$1 = this.week.days[day][index];
             if (!b$1)
                 return A;
             return b `<section
@@ -1480,7 +1609,7 @@
             max="30"
             step="0.5"
             .value=${String(b$1.target)}
-            @change=${(e) => this.change(day, this.draft.days[day].map((x, j) => j === index
+            @change=${(e) => this.change(day, this.week.days[day].map((x, j) => j === index
             ? {
                 ...x,
                 target: Number(e.target.value),
@@ -1493,7 +1622,7 @@
         <button
           ?disabled=${!index}
           @click=${() => {
-            this.change(day, removeBlock(this.draft.days[day], index));
+            this.change(day, removeBlock(this.week.days[day], index));
             this.block = null;
         }}
         >
@@ -1516,7 +1645,7 @@
         ${dayNames[weekdays.indexOf(this.copyFrom)]}
         to…
       </h2>
-      <p class="muted">Replace the selected days. Save the profile to apply.</p>
+      <p class="muted">Replace the selected days. Save the week to apply.</p>
       <form
         @submit=${(e) => {
             e.preventDefault();
@@ -1527,7 +1656,13 @@
                 this.clearDayInputs(day);
             this.block = null;
             this.error = "";
-            this.draft = copyDay(this.draft, this.copyFrom, data.getAll("days").map(String));
+            this.draft = {
+                ...this.draft,
+                rooms: {
+                    ...this.draft.rooms,
+                    [this.selectedRoom]: copyDay(this.week, this.copyFrom, data.getAll("days").map(String)),
+                },
+            };
             this.renderRoot
                 .querySelector("#copy-day")
                 ?.close();
@@ -1562,23 +1697,156 @@
       </form>
     </dialog>`;
         }
+        createDialog() {
+            if (!this.creating)
+                return A;
+            return b `<dialog
+      id="create-schedule"
+      @close=${() => {
+            this.creating = false;
+        }}
+    >
+      <h2>Create schedule</h2>
+      <p class="muted">
+        Copy a whole-house plan or start every room at 18° all day.
+      </p>
+      <form
+        @submit=${(e) => {
+            e.preventDefault();
+            if (!this.writable || this.saving)
+                return;
+            const data = new FormData(e.target);
+            const source = String(data.get("source"));
+            this.selected = "";
+            this.timeInputs.clear();
+            this.block = null;
+            this.draft = {
+                name: String(data.get("name")).trim(),
+                rooms: source
+                    ? structuredClone(this.status.configuration.schedules[source].rooms)
+                    : Object.fromEntries(Object.keys(this.status.configuration.rooms).map((id) => [
+                        id,
+                        defaultWeek(),
+                    ])),
+            };
+            this.baseline = "";
+            this.error = "";
+            this.renderRoot
+                .querySelector("#create-schedule")
+                ?.close();
+        }}
+      >
+        <fieldset ?disabled=${!this.writable || this.saving}>
+          <div class="field">
+            <label for="new-schedule-name">Schedule name</label
+            ><input
+              id="new-schedule-name"
+              name="name"
+              required
+              maxlength="200"
+              placeholder="New schedule"
+            />
+          </div>
+          <div class="field">
+            <label for="schedule-source">Start from</label
+            ><select
+              id="schedule-source"
+              name="source"
+              .value=${this.status?.configuration.active_schedule_id ?? ""}
+            >
+              ${Object.entries(this.status?.configuration.schedules ?? {}).map(([id, s]) => b `<option
+                    value=${id}
+                    ?selected=${id ===
+            this.status?.configuration.active_schedule_id}
+                  >
+                    ${s.name}
+                  </option>`)}
+              <option value="">Blank · 18° all day</option>
+            </select>
+          </div>
+          <div class="actions">
+            <button
+              type="button"
+              @click=${() => this.renderRoot
+            .querySelector("#create-schedule")
+            ?.close()}
+            >
+              Cancel</button
+            ><button type="submit" class="primary">Create draft</button>
+          </div>
+        </fieldset>
+      </form>
+    </dialog>`;
+        }
+        copyRoomsDialog() {
+            if (!this.copyRooms)
+                return A;
+            return b `<dialog
+      id="copy-rooms"
+      @close=${() => {
+            this.copyRooms = false;
+        }}
+    >
+      <h2>Copy this room’s week to…</h2>
+      <p class="muted">
+        Replace the selected room weeks in ${this.draft?.name}. Save the
+        schedule to apply.
+      </p>
+      <form
+        @submit=${(e) => {
+            e.preventDefault();
+            if (!this.writable || this.saving)
+                return;
+            const data = new FormData(e.target);
+            const rooms = { ...this.draft.rooms };
+            for (const id of data.getAll("rooms").map(String))
+                rooms[id] = structuredClone(this.week);
+            this.draft = { ...this.draft, rooms };
+            this.renderRoot
+                .querySelector("#copy-rooms")
+                ?.close();
+        }}
+      >
+        <fieldset ?disabled=${!this.writable || this.saving}>
+          ${Object.entries(this.status?.configuration.rooms ?? {}).map(([id, room]) => b `<label class="check"
+                ><input
+                  name="rooms"
+                  type="checkbox"
+                  value=${id}
+                  ?disabled=${id === this.selectedRoom}
+                />${room.name}</label
+              >`)}
+          <div class="actions">
+            <button
+              type="button"
+              @click=${() => this.renderRoot
+            .querySelector("#copy-rooms")
+            ?.close()}
+            >
+              Cancel</button
+            ><button class="primary" type="submit">Copy selected rooms</button>
+          </div>
+        </fieldset>
+      </form>
+    </dialog>`;
+        }
     }
     if (!customElements.get("heating-schedules"))
         customElements.define("heating-schedules", HeatingSchedules);
 
     const modeNames = {
-        auto: "Schedule",
+        schedule: "Schedule",
         away: "Away",
-        summer: "Heating off",
+        off: "Off",
         manual: "Manual",
     };
-    function modeExplanation(mode, settings, until) {
+    function modeExplanation(mode, settings, until, scheduleName = "Winter") {
         switch (mode) {
-            case "auto":
-                return "Rooms follow their weekly profiles.";
+            case "schedule":
+                return `Rooms follow the ${scheduleName} schedule.`;
             case "away":
                 return `All rooms at ${temperature(settings.away_temperature)}${until ? ` (until ${until})` : ""}.`;
-            case "summer":
+            case "off":
                 return `Boiler heating off, radiators kept at ${temperature(settings.frost_temperature)}. Hot water unaffected.`;
             case "manual":
                 return "Central Heating doesn't touch the radiators; the boiler still follows their demand.";
@@ -1633,9 +1901,16 @@
                 const data = new FormData(event.target);
                 const mode = String(data.get("mode"));
                 const until = mode === "away" && data.get("until") ? String(data.get("until")) : null;
-                if (await this.write("mode/set", { mode, until }, "Heating mode saved.")) {
+                if (await this.write("mode/set", {
+                    mode,
+                    until,
+                    ...(mode === "schedule"
+                        ? { schedule_id: String(data.get("schedule_id")) }
+                        : {}),
+                }, "Heating mode saved.")) {
                     this.modeDraft = undefined;
                     this.modeUntilDraft = undefined;
+                    this.scheduleDraft = undefined;
                 }
             };
             this.saveRoom = async (event) => {
@@ -1653,21 +1928,13 @@
                     this.error = "Choose at least one thermostat.";
                     return;
                 }
-                let profileId = String(form.get("profile_id"));
-                if (!profileId) {
-                    if (!(await this.write("profile/save", { profile: defaultProfile() }, "Default profile created.")))
-                        return;
-                    profileId = this.status.saved_id ?? "";
-                }
-                if (!profileId) {
-                    this.error = "A heating profile is required.";
-                    return;
-                }
                 const room = {
                     ...(this.editing.id ? { id: this.editing.id } : {}),
                     name,
                     trvs,
-                    profile_id: profileId,
+                    ...(!this.editing.id && form.get("copy_week_from_room")
+                        ? { copy_week_from_room: String(form.get("copy_week_from_room")) }
+                        : {}),
                     area_id: String(form.get("area_id") ?? "") || null,
                     enabled: form.has("enabled"),
                 };
@@ -1706,6 +1973,7 @@
             shadowConfirm: { state: true },
             modeDraft: { state: true },
             modeUntilDraft: { state: true },
+            scheduleDraft: { state: true },
         }; }
         set hass(value) {
             if (!value) {
@@ -1758,6 +2026,7 @@
         disconnect() {
             this.modeDraft = undefined;
             this.modeUntilDraft = undefined;
+            this.scheduleDraft = undefined;
             this.generation++;
             this.releaseSubscription();
             this.removeConnectionListeners?.();
@@ -1937,7 +2206,7 @@
           <h1>${this.config.title ?? "Central Heating"}</h1>
           <small
             >${s
-            ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}`
+            ? `${Object.keys(s.rooms).length} rooms · ${modeNames[s.configuration.mode.value]}${s.configuration.mode.value === "schedule" ? ` · ${s.configuration.schedules[s.configuration.active_schedule_id]?.name ?? ""}` : ""}`
             : "Your rooms, one comfortable home"}</small
           >
         </div>
@@ -2004,6 +2273,7 @@
             const selectedMode = this.modeDraft ?? s.configuration.mode.value;
             const selectedUntil = this.modeUntilDraft ??
                 localDateTime(s.configuration.mode.until, this.hass?.config?.time_zone);
+            const selectedSchedule = this.scheduleDraft ?? s.configuration.active_schedule_id;
             return b `<div class="grid">
         <section class="panel boiler" aria-label="Boiler status">
           <div class="boiler-heading">
@@ -2049,7 +2319,7 @@
                 .value;
         }}
                 >
-                  ${["auto", "away", "summer", "manual"].map((mode) => b `<option
+                  ${["schedule", "away", "off", "manual"].map((mode) => b `<option
                         value=${mode}
                         ?selected=${selectedMode === mode}
                       >
@@ -2058,10 +2328,29 @@
                 </select>
                 <small id="mode-explanation" aria-live="polite"
                   >${modeExplanation(selectedMode, s.configuration.settings, selectedMode === "away" && selectedUntil
-            ? scheduleTime(selectedUntil.slice(11, 16), this.hass?.locale)
-            : undefined)}</small
+            ? awayUntilLabel(selectedUntil, this.hass?.config?.time_zone, this.hass?.locale)
+            : undefined, s.configuration.schedules[selectedSchedule]?.name)}</small
                 >
               </div>
+              ${selectedMode === "schedule"
+            ? b `<div class="field">
+                    <label for="active-schedule">Schedule</label
+                    ><select
+                      id="active-schedule"
+                      name="schedule_id"
+                      @change=${(e) => {
+                this.scheduleDraft = e.target.value;
+            }}
+                    >
+                      ${Object.entries(s.configuration.schedules).map(([id, schedule]) => b `<option
+                            value=${id}
+                            ?selected=${id === selectedSchedule}
+                          >
+                            ${schedule.name}
+                          </option>`)}
+                    </select>
+                  </div>`
+            : A}
               <div class="field" data-until ?hidden=${selectedMode !== "away"}>
                 <label for="until">Away until (optional)</label
                 ><input
@@ -2099,13 +2388,13 @@
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${s.configuration.mode.value !== "auto"
+                  >${s.configuration.mode.value !== "schedule"
             ? `${modeNames[s.configuration.mode.value]} · ${temperature(room.desired ?? room.target)}`
             : room.override_until
                 ? `Schedule · Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
                 : room.demanding
                     ? "Schedule · Calling for heat"
-                    : "Schedule · Following profile"}</small
+                    : "Schedule · Following week"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until
@@ -2294,9 +2583,9 @@
                       <h3>${room.name}</h3>
                       <small
                         >${room.trvs.length}
-                        thermostat${room.trvs.length === 1 ? "" : "s"} ·
-                        ${s.configuration.profiles[room.profile_id]?.name ??
-                "No profile"}${room.enabled ? "" : " · Disabled"}</small
+                        thermostat${room.trvs.length === 1
+                ? ""
+                : "s"}${room.enabled ? "" : " · Disabled"}</small
                       >
                       <div class="room-tags">
                         ${room.trvs.map((trv) => b `<span class="badge"
@@ -2326,7 +2615,6 @@
                     : {
                         name: "",
                         trvs: [],
-                        profile_id: Object.keys(this.status?.configuration.profiles ?? {})[0] ?? "",
                         area_id: null,
                         enabled: true,
                     },
@@ -2352,7 +2640,6 @@
             const entities = Object.entries(available).filter(([id]) => id.startsWith("climate.") &&
                 !used.has(id) &&
                 !(s.room_entity_ids ?? []).includes(id));
-            const profiles = Object.entries(s.configuration.profiles);
             return b `<form class="panel" @submit=${this.saveRoom}>
       <h2>${draft.id ? "Edit room" : "Add a room"}</h2>
       <fieldset ?disabled=${this.busy || !this.writable}>
@@ -2367,25 +2654,15 @@
               .value=${draft.room.name}
             />
           </div>
-          <div class="field">
-            <label for="room-profile">Heating profile</label
-            ><select
-              id="room-profile"
-              name="profile_id"
-              .value=${draft.room.profile_id}
-            >
-              ${profiles.length
-            ? profiles.map(([id, p]) => b `<option value=${id}>${p.name}</option>`)
-            : b `<option value="">
-                    Create default · 18° all week
-                  </option>`}</select
-            >${!profiles.length
-            ? b `<small
-                  >A simple 00:00 → 18° profile will be created when you
-                  save.</small
-                >`
+          ${!draft.id
+            ? b `<div class="field">
+                <label for="copy-week-from-room">Start its weeks from</label
+                ><select id="copy-week-from-room" name="copy_week_from_room">
+                  <option value="">18° all day</option>
+                  ${Object.entries(s.configuration.rooms).map(([id, room]) => b `<option value=${id}>${room.name}</option>`)}
+                </select>
+              </div>`
             : A}
-          </div>
           <div class="field wide">
             <label for="trv-filter">Radiator thermostats</label
             ><input
@@ -2503,14 +2780,18 @@
       .status=${s}
       .hass=${this.hass}
       .writable=${this.writable}
-      .saveProfile=${async (profile) => {
-            if (!(await this.write("profile/save", { profile }, "Profile saved.")))
+      .saveSchedule=${async (schedule) => {
+            if (!(await this.write("schedule/save", { schedule }, "Schedule saved.")))
                 throw new Error(this.error || "Unable to save while reconnecting.");
             return this.status?.saved_id;
         }}
-      .deleteProfile=${async (id) => {
-            if (!(await this.write("profile/delete", { profile_id: id }, "Profile deleted.")))
+      .deleteSchedule=${async (id) => {
+            if (!(await this.write("schedule/delete", { schedule_id: id }, "Schedule deleted.")))
                 throw new Error(this.error || "Unable to delete while reconnecting.");
+        }}
+      .activateSchedule=${async (id) => {
+            if (!(await this.write("schedule/activate", { schedule_id: id }, "Schedule activated.")))
+                throw new Error(this.error || "Unable to activate while reconnecting.");
         }}
     ></heating-schedules>`;
         }
@@ -2747,37 +3028,56 @@
             sync_rooms_on_knob_change: true,
             retry_seconds: 300,
         },
-        mode: { value: "auto", until: null },
+        mode: { value: "schedule", until: null },
         shadow: true,
-        profiles: {
-            profile_a: {
-                ...defaultProfile("Profile A"),
-                days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day, i) => [
-                    day,
-                    [
-                        { start: "00:00", target: 18 },
-                        { start: i < 5 ? "06:00" : "08:00", target: 21 },
-                        { start: "09:00", target: 18.5 },
-                        { start: "17:00", target: 21 },
-                        { start: "22:00", target: 18 },
-                    ],
-                ])),
+        active_schedule_id: "winter",
+        schedules: {
+            winter: {
+                name: "Winter",
+                rooms: {
+                    room_a: {
+                        days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day, i) => [
+                            day,
+                            [
+                                { start: "00:00", target: 18 },
+                                { start: i < 5 ? "06:00" : "08:00", target: 21 },
+                                { start: "09:00", target: 18.5 },
+                                { start: "17:00", target: 21 },
+                                { start: "22:00", target: 18 },
+                            ],
+                        ])),
+                    },
+                    room_b: {
+                        days: Object.fromEntries(["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
+                            day,
+                            [
+                                { start: "00:00", target: 17 },
+                                { start: "07:00", target: 20 },
+                                { start: "22:00", target: 17 },
+                            ],
+                        ])),
+                    },
+                },
             },
-            profile_b: defaultProfile("Profile B"),
-            profile_c: defaultProfile("Profile C"),
+            autumn: {
+                name: "Autumn",
+                rooms: { room_a: defaultWeek(), room_b: defaultWeek() },
+            },
+            spring: {
+                name: "Spring",
+                rooms: { room_a: defaultWeek(), room_b: defaultWeek() },
+            },
         },
         rooms: {
             room_a: {
                 name: "Room A",
                 trvs: ["climate.trv_a"],
-                profile_id: "profile_a",
                 area_id: "area_a",
                 enabled: true,
             },
             room_b: {
                 name: "Room B",
                 trvs: ["climate.trv_b"],
-                profile_id: "profile_a",
                 area_id: null,
                 enabled: true,
             },
@@ -2838,22 +3138,48 @@
         for (const listener of listeners)
             listener(structuredClone(status));
     }
+    const demoNow = new Date("2026-11-22T17:30:00Z");
+    function roomPlan(value, id) {
+        const week = value.configuration.schedules[value.configuration.active_schedule_id].rooms[id];
+        const names = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+        const today = names[demoNow.getUTCDay()];
+        const minute = demoNow.getUTCHours() * 60 + demoNow.getUTCMinutes();
+        const target = [...week.days[today]]
+            .reverse()
+            .find((block) => Number(block.start.slice(0, 2)) * 60 + Number(block.start.slice(3)) <=
+            minute).target;
+        for (let offset = 0; offset <= 7; offset++) {
+            const day = new Date(Date.UTC(demoNow.getUTCFullYear(), demoNow.getUTCMonth(), demoNow.getUTCDate() + offset));
+            for (const block of week.days[names[day.getUTCDay()]]) {
+                const at = new Date(day);
+                at.setUTCHours(Number(block.start.slice(0, 2)), Number(block.start.slice(3)));
+                if (at > demoNow && block.target !== target)
+                    return {
+                        target,
+                        next_change: at.toISOString(),
+                        next_target: block.target,
+                    };
+            }
+        }
+        return { target, next_change: null, next_target: null };
+    }
     function recalculate() {
         status.global.shadow = status.configuration.shadow;
         status.global.mode = status.configuration.mode;
         for (const [id, room] of Object.entries(status.configuration.rooms)) {
             const override = status.configuration.overrides[id];
+            const plan = roomPlan(status, id);
             const old = status.rooms[id];
             const mode = status.configuration.mode.value;
-            const activeOverride = mode === "auto" || mode === "away" ? override : undefined;
+            const activeOverride = mode === "schedule" || mode === "away" ? override : undefined;
             const target = mode === "manual"
                 ? (old?.target ?? Object.values(old?.trvs ?? {})[0] ?? 18)
-                : mode === "summer"
+                : mode === "off"
                     ? status.configuration.settings.frost_temperature
                     : (activeOverride?.target ??
                         (mode === "away"
                             ? status.configuration.settings.away_temperature
-                            : 21));
+                            : plan.target));
             status.rooms[id] = {
                 ...old,
                 name: room.name,
@@ -2866,14 +3192,13 @@
                         status.configuration.settings.hysteresis,
                 sync_problem: old?.sync_problem ?? false,
                 override_until: activeOverride?.until ?? null,
-                next_change: old?.next_change ?? null,
-                next_target: old?.next_target ?? null,
+                next_change: plan.next_change,
+                next_target: plan.next_target,
             };
         }
         status.global.demand_count = Object.values(status.rooms).filter((room) => room.demanding).length;
         status.global.command.heat =
-            status.global.demand_count > 0 &&
-                status.configuration.mode.value !== "summer";
+            status.global.demand_count > 0 && status.configuration.mode.value !== "off";
     }
     function respond(message) {
         const command = message.type.replace("central_heating/", "");
@@ -2886,59 +3211,103 @@
                         { entry_id: "demo_entry_b", title: "Demo boiler B" },
                     ],
                 };
+        const next = structuredClone(status);
         let savedId;
         if (command === "mode/set") {
-            status.configuration.mode = {
+            if (message.schedule_id) {
+                if (!next.configuration.schedules[String(message.schedule_id)])
+                    throw new Error("Unknown schedule");
+                next.configuration.active_schedule_id = String(message.schedule_id);
+            }
+            next.configuration.mode = {
                 value: message.mode,
                 until: message.until,
             };
         }
         else if (command === "override/set") {
-            const room = String(message.room_id);
-            status.configuration.overrides[room] = {
+            const id = String(message.room_id);
+            next.configuration.overrides[id] = {
                 target: Number(message.temperature),
                 until: message.kind === "next_block"
-                    ? (status.rooms[room].next_change ??
-                        new Date(Date.now() + 7 * 86400000).toISOString())
-                    : new Date(Date.now() + Number(message.minutes ?? 120) * 60000).toISOString(),
+                    ? (next.rooms[id].next_change ??
+                        new Date(demoNow.getTime() + 7 * 86400000).toISOString())
+                    : new Date(demoNow.getTime() + Number(message.minutes ?? 120) * 60000).toISOString(),
                 source: "card",
                 kind: message.kind === "next_block" ? "next_block" : "duration",
             };
         }
         else if (command === "override/clear")
-            delete status.configuration.overrides[String(message.room_id)];
+            delete next.configuration.overrides[String(message.room_id)];
         else if (command === "room/save") {
-            const room = message.room;
-            savedId = room.id ?? `room_${nextId++}`;
-            const copy = { ...room };
+            const value = message.room;
+            if (value.copy_week_from_room &&
+                !next.configuration.rooms[value.copy_week_from_room])
+                throw new Error("Unknown room");
+            savedId = value.id ?? `room_${nextId++}`;
+            const copy = { ...value };
             delete copy.id;
-            status.configuration.rooms[savedId] = copy;
+            delete copy.copy_week_from_room;
+            if (!value.id)
+                for (const schedule of Object.values(next.configuration.schedules))
+                    schedule.rooms[savedId] = value.copy_week_from_room
+                        ? structuredClone(schedule.rooms[value.copy_week_from_room])
+                        : defaultWeek();
+            next.configuration.rooms[savedId] = copy;
         }
         else if (command === "room/delete") {
-            delete status.configuration.rooms[String(message.room_id)];
-            delete status.rooms[String(message.room_id)];
-            delete status.configuration.overrides[String(message.room_id)];
+            const id = String(message.room_id);
+            delete next.configuration.rooms[id];
+            delete next.rooms[id];
+            delete next.configuration.overrides[id];
+            for (const schedule of Object.values(next.configuration.schedules))
+                delete schedule.rooms[id];
         }
-        else if (command === "profile/save") {
-            const profile = message.profile;
-            profilePayload(profile, profile.id);
-            savedId = profile.id ?? `profile_${nextId++}`;
-            const copy = { ...profile };
-            delete copy.id;
-            status.configuration.profiles[savedId] = copy;
+        else if (command === "schedule/save") {
+            const value = message.schedule;
+            schedulePayload(value, value.id);
+            if (Object.entries(next.configuration.schedules).some(([id, s]) => id !== value.id &&
+                s.name.trim().toLowerCase() === value.name.trim().toLowerCase()))
+                throw new Error("Schedule names must be unique.");
+            savedId = value.id ?? `schedule_${nextId++}`;
+            next.configuration.schedules[savedId] = {
+                name: value.name,
+                rooms: structuredClone(value.rooms),
+            };
         }
-        else if (command === "profile/delete") {
-            if (Object.values(status.configuration.rooms).some((r) => r.profile_id === message.profile_id))
-                throw new Error("Profile is used by a room.");
-            delete status.configuration.profiles[String(message.profile_id)];
+        else if (command === "schedule/activate") {
+            const id = String(message.schedule_id);
+            if (!next.configuration.schedules[id])
+                throw new Error("Unknown schedule");
+            next.configuration.active_schedule_id = id;
+        }
+        else if (command === "schedule/delete") {
+            const id = String(message.schedule_id);
+            if (id === next.configuration.active_schedule_id ||
+                Object.keys(next.configuration.schedules).length <= 1)
+                throw new Error("The active or last schedule cannot be deleted.");
+            delete next.configuration.schedules[id];
         }
         else if (command === "settings/save") {
-            Object.assign(status.configuration.settings, message.settings ?? {});
+            Object.assign(next.configuration.settings, message.settings ?? {});
             if (message.shadow !== undefined)
-                status.configuration.shadow = Boolean(message.shadow);
+                next.configuration.shadow = Boolean(message.shadow);
         }
         else
             throw new Error("Unknown demo command");
+        for (const [id, override] of Object.entries(next.configuration.overrides)) {
+            if (override.kind !== "next_block" || !next.configuration.rooms[id])
+                continue;
+            const before = status.configuration.schedules[status.configuration.active_schedule_id]
+                .rooms[id];
+            const after = next.configuration.schedules[next.configuration.active_schedule_id].rooms[id];
+            if (status.configuration.active_schedule_id !==
+                next.configuration.active_schedule_id ||
+                JSON.stringify(before) !== JSON.stringify(after))
+                override.until =
+                    roomPlan(next, id).next_change ??
+                        new Date(demoNow.getTime() + 7 * 86400000).toISOString();
+        }
+        status = next;
         recalculate();
         notify();
         return {
@@ -3011,6 +3380,12 @@
     document.querySelector("#width").value = width;
     document.querySelector("#reset").addEventListener("click", () => {
         status = fixture();
+        card.modeDraft = undefined;
+        card.modeUntilDraft = undefined;
+        card.scheduleDraft = undefined;
+        const editor = card.shadowRoot?.querySelector("heating-schedules");
+        if (editor)
+            editor.draft = undefined;
         hass.connection.connected = true;
         connectionEvents.ready.forEach((listener) => listener());
         notify();

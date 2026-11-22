@@ -14,25 +14,26 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from custom_components.central_heating.const import DOMAIN
 from custom_components.central_heating.engine import HeatingEngine
 from custom_components.central_heating.rooms import RoomController
-from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Profile, Room
+from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Room, Week
 from custom_components.central_heating.storage import HeatingStore, Mode
+from tests.schedules import seed
 
 pytestmark = pytest.mark.integration
 
 
-async def build_rooms(hass, freezer, *, respond=True, mode="auto", sync=True, blocks=None):
+async def build_rooms(hass, freezer, *, respond=True, mode="schedule", sync=True, blocks=None):
     freezer.move_to("2026-01-05T05:59:50+00:00")
     await hass.config.async_set_time_zone("UTC")
-    profile = Profile(
-        "Profile A",
+    profile = Week(
+        "Week A",
         tuple(Day(day, blocks or (Block("00:00", 18), Block("06:00", 21))) for day in WEEKDAYS),
     )
-    room = Room("Room A", ("climate.trv_a", "climate.trv_b"), profile.id)
+    room = Room("Room A", ("climate.trv_a", "climate.trv_b"))
     store = HeatingStore(hass, "entry_a")
     await store.async_update(
         lambda data: replace(
             data,
-            profiles=(profile,),
+            schedules=(seed(profile, (room,)),),
             rooms=(room,),
             mode=Mode(mode),
             settings=replace(data.settings, retry_seconds=10, sync_rooms_on_knob_change=sync),
@@ -199,24 +200,22 @@ async def test_away_expiry_summer_and_profile_change_clear_override(hass, freeze
     await hass.async_block_till_done()
     assert hass.states.get("climate.trv_b").attributes["temperature"] == 15
     await advance(hass, freezer, 20)
-    assert engine.store.data.mode.value == "auto"
+    assert engine.store.data.mode.value == "schedule"
     assert hass.states.get("climate.trv_b").attributes["temperature"] == 21
-    await engine.async_set_mode("summer")
+    await engine.async_set_mode("off")
     await hass.async_block_till_done()
     assert hass.states.get("climate.trv_b").attributes["temperature"] == 16
     assert engine.command.heat is False
-    await engine.async_set_mode("auto")
+    await engine.async_set_mode("schedule")
     await engine.rooms.async_set_override(room.id, 22)
-    other = Profile("Profile B", tuple(Day(day, (Block("00:00", 19),)) for day in WEEKDAYS))
+    other = Week("Autumn", tuple(Day(day, (Block("00:00", 19),)) for day in WEEKDAYS))
     await engine.store.async_update(
-        lambda data: replace(
-            data, profiles=(*data.profiles, other), rooms=(replace(room, profile_id=other.id),)
-        )
+        lambda data: replace(data, schedules=(*data.schedules, seed(other, (room,), id="autumn")))
     )
-    await engine.async_data_changed()
+    await engine.async_set_schedule("autumn")
     await hass.async_block_till_done()
-    assert not engine.store.data.overrides
-    assert hass.states.get("climate.trv_b").attributes["temperature"] == 19
+    assert engine.store.data.overrides[0].target == 22
+    assert hass.states.get("climate.trv_b").attributes["temperature"] == 22
     await engine.async_stop(unloading=False)
 
 
@@ -385,7 +384,7 @@ async def test_room_exception_cannot_skip_boiler_send(hass, freezer):
     await engine.async_stop(unloading=False)
 
 
-@pytest.mark.parametrize("mode", ["summer", "manual"])
+@pytest.mark.parametrize("mode", ["off", "manual"])
 async def test_knobs_ignored_in_non_override_modes(hass, freezer, mode):
     engine, room, calls = await build_rooms(hass, freezer, mode=mode)
     calls.clear()
@@ -394,7 +393,7 @@ async def test_knobs_ignored_in_non_override_modes(hass, freezer, mode):
     assert not engine.store.data.overrides and not calls
     await advance(hass, freezer, 5)
     assert not calls
-    if mode == "summer":
+    if mode == "off":
         await engine.async_data_changed()
         await hass.async_block_till_done()
         assert calls[0].data["temperature"] == 16

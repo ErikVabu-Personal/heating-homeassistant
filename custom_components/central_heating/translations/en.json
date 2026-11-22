@@ -39,11 +39,14 @@
       "mode": {
         "name": "Mode",
         "state": {
-          "auto": "Schedule",
+          "schedule": "Schedule",
           "away": "Away",
-          "summer": "Heating off",
+          "off": "Off",
           "manual": "Manual"
         }
+      },
+      "active_schedule": {
+        "name": "Active schedule"
       }
     },
     "switch": {
@@ -154,6 +157,19 @@
         "config_entry_id": {
           "name": "Heating instance",
           "description": "The Central Heating configuration entry to control."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Activate a whole-house weekly schedule.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Heating instance"
+        },
+        "schedule": {
+          "name": "Schedule",
+          "description": "Schedule name or id."
         }
       }
     }

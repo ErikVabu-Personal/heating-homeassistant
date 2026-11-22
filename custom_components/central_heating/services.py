@@ -8,15 +8,18 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .storage import MODES
+from .storage import MODE_INPUTS
 
 SCHEMAS = {
     "set_mode": vol.Schema(
         {
             vol.Required("config_entry_id"): str,
-            vol.Required("mode"): vol.In(MODES),
+            vol.Required("mode"): vol.In(MODE_INPUTS),
             vol.Optional("until"): cv.datetime,
         }
+    ),
+    "set_schedule": vol.Schema(
+        {vol.Required("config_entry_id"): str, vol.Required("schedule"): str}
     ),
     "set_override": vol.Schema(
         {
@@ -45,6 +48,9 @@ def async_register_services(hass):
                 if until is not None and until.tzinfo is None:
                     until = until.replace(tzinfo=dt_util.get_default_time_zone())
                 await engine.async_set_mode(call.data["mode"], until)
+                return
+            if call.service == "set_schedule":
+                await engine.async_set_schedule(call.data["schedule"])
                 return
             if call.service in ("set_override", "clear_override"):
                 entity = er.async_get(hass).async_get(call.data["room"])

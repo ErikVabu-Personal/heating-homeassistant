@@ -46,12 +46,10 @@ export function localDateTime(value: string | null, timeZone?: string): string {
   );
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
-export function defaultProfile(name = "Default profile"): {
-  name: string;
+export function defaultWeek(): {
   days: Record<string, { start: string; target: number }[]>;
 } {
   return {
-    name,
     days: Object.fromEntries(
       ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => [
         day,
@@ -85,4 +83,26 @@ export function parseScheduleTime(value: string, locale?: Locale): string {
       return clock;
   }
   throw new Error("Enter a valid time on the five-minute grid.");
+}
+
+/** Format a wall-clock Away picker value in HA's zone, adding a date beyond today. */
+export function awayUntilLabel(
+  value: string,
+  timeZone?: string,
+  locale?: Locale,
+  now = new Date(),
+): string {
+  const clock = scheduleTime(value.slice(11, 16), locale);
+  if (
+    value.slice(0, 10) ===
+    localDateTime(now.toISOString(), timeZone).slice(0, 10)
+  )
+    return clock;
+  const date = new Intl.DateTimeFormat(locale?.language, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${value.slice(0, 10)}T12:00:00Z`));
+  return `${date} ${clock}`;
 }

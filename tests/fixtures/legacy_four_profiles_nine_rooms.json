@@ -1,0 +1,530 @@
+{
+  "settings": {
+    "frost_temperature": 8,
+    "hysteresis": 0.4,
+    "away_temperature": 15.5,
+    "override_default": "next_block",
+    "override_minutes": 75,
+    "sync_rooms_on_knob_change": false,
+    "retry_seconds": 42
+  },
+  "mode": {
+    "value": "auto",
+    "until": null
+  },
+  "profiles": {
+    "legacy_0": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "06:30",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "06:30",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "06:30",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "06:30",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "06:30",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "08:00",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 16.0
+          },
+          {
+            "start": "08:00",
+            "target": 20.0
+          },
+          {
+            "start": "22:00",
+            "target": 17.0
+          }
+        ]
+      }
+    },
+    "legacy_1": {
+      "name": "Profile B",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "06:30",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "06:30",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "06:30",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "06:30",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "06:30",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "08:00",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 16.5
+          },
+          {
+            "start": "08:00",
+            "target": 20.5
+          },
+          {
+            "start": "22:00",
+            "target": 17.5
+          }
+        ]
+      }
+    },
+    "legacy_2": {
+      "name": "Profile C",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "06:30",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "06:30",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "06:30",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "06:30",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "06:30",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "08:00",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 17.0
+          },
+          {
+            "start": "08:00",
+            "target": 21.0
+          },
+          {
+            "start": "22:00",
+            "target": 18.0
+          }
+        ]
+      }
+    },
+    "legacy_3": {
+      "name": "Profile D",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "06:30",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "06:30",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "06:30",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "06:30",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "06:30",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "08:00",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 17.5
+          },
+          {
+            "start": "08:00",
+            "target": 21.5
+          },
+          {
+            "start": "22:00",
+            "target": 18.5
+          }
+        ]
+      }
+    }
+  },
+  "rooms": {
+    "room_0": {
+      "name": "Room A",
+      "trvs": [
+        "climate.trv_0",
+        "climate.trv_0_b"
+      ],
+      "profile_id": "legacy_0",
+      "area_id": "area_0",
+      "enabled": true
+    },
+    "room_1": {
+      "name": "Room B",
+      "trvs": [
+        "climate.trv_1"
+      ],
+      "profile_id": "legacy_1",
+      "area_id": null,
+      "enabled": true
+    },
+    "room_2": {
+      "name": "Room C",
+      "trvs": [
+        "climate.trv_2"
+      ],
+      "profile_id": "legacy_2",
+      "area_id": "area_0",
+      "enabled": true
+    },
+    "room_3": {
+      "name": "Room D",
+      "trvs": [
+        "climate.trv_3",
+        "climate.trv_3_b"
+      ],
+      "profile_id": "legacy_3",
+      "area_id": null,
+      "enabled": true
+    },
+    "room_4": {
+      "name": "Room E",
+      "trvs": [
+        "climate.trv_4"
+      ],
+      "profile_id": "legacy_0",
+      "area_id": "area_1",
+      "enabled": true
+    },
+    "room_5": {
+      "name": "Room F",
+      "trvs": [
+        "climate.trv_5"
+      ],
+      "profile_id": "legacy_1",
+      "area_id": null,
+      "enabled": true
+    },
+    "room_6": {
+      "name": "Room G",
+      "trvs": [
+        "climate.trv_6",
+        "climate.trv_6_b"
+      ],
+      "profile_id": "legacy_2",
+      "area_id": "area_2",
+      "enabled": true
+    },
+    "room_7": {
+      "name": "Room H",
+      "trvs": [
+        "climate.trv_7"
+      ],
+      "profile_id": "legacy_3",
+      "area_id": null,
+      "enabled": true
+    },
+    "room_8": {
+      "name": "Room I",
+      "trvs": [
+        "climate.trv_8"
+      ],
+      "profile_id": "legacy_0",
+      "area_id": "area_2",
+      "enabled": false
+    }
+  },
+  "overrides": {
+    "room_0": {
+      "target": 22,
+      "until": "2027-01-01T18:00:00+00:00",
+      "source": "card",
+      "kind": "next_block"
+    },
+    "room_1": {
+      "target": 21.5,
+      "until": "2027-01-01T19:00:00+00:00",
+      "source": "trv",
+      "kind": "duration"
+    }
+  },
+  "shadow": false
+}

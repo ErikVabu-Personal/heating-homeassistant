@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Profile, Room
+from custom_components.central_heating.schedule import WEEKDAYS, Block, Day, Room, Week
 from custom_components.central_heating.storage import (
     HeatingData,
     Mode,
@@ -15,13 +15,14 @@ from custom_components.central_heating.storage import (
     to_json,
     validate_data,
 )
+from tests.schedules import seed
 
 
 def example():
-    profile = Profile("Profile A", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
-    room = Room("Room A", ("climate.trv_a",), profile.id)
+    profile = Week("Week A", tuple(Day(day, (Block("00:00", 18),)) for day in WEEKDAYS))
+    room = Room("Room A", ("climate.trv_a",))
     override = Override(room.id, 21, datetime(2027, 1, 1, tzinfo=UTC), "card")
-    return HeatingData(profiles=(profile,), rooms=(room,), overrides=(override,))
+    return HeatingData(schedules=(seed(profile, (room,)),), rooms=(room,), overrides=(override,))
 
 
 def test_new_entry_is_manual_and_shadow():
@@ -93,7 +94,7 @@ def test_trv_id_domain_and_syntax(trv):
 
 def test_used_profile_cannot_be_removed():
     with pytest.raises(ValueError):
-        validate_data(replace(example(), profiles=()))
+        validate_data(replace(example(), schedules=()))
 
 
 def test_trv_cannot_be_assigned_to_two_rooms():
@@ -106,7 +107,7 @@ def test_trv_cannot_be_assigned_to_two_rooms():
     "mode",
     [
         Mode("other"),
-        Mode("auto", datetime(2027, 1, 1, tzinfo=UTC)),
+        Mode("schedule", datetime(2027, 1, 1, tzinfo=UTC)),
         Mode("away", datetime(2027, 1, 1)),
     ],
 )
