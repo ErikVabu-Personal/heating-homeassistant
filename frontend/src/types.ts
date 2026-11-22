@@ -47,6 +47,7 @@ export interface RoomStatus {
 export interface Status {
   config_entry_id: string;
   room_entity_ids?: string[];
+  used_trv_ids?: string[];
   configuration: Configuration;
   global: {
     demand_count: number;
@@ -70,10 +71,26 @@ export interface Entry {
   title: string;
 }
 export type Message = { type: string; [key: string]: unknown };
+export interface Locale {
+  language: string;
+  time_format: "12" | "24" | "language" | "system";
+  time_zone?: "local" | "server";
+}
+export type SubscriptionEvent = Status | { unloaded: true };
 export interface Hass {
+  locale?: Locale;
   config?: { time_zone: string };
   callWS<T>(message: Message): Promise<T>;
   connection: {
+    connected?: boolean;
+    addEventListener?(
+      event: "disconnected" | "ready",
+      listener: () => void,
+    ): void;
+    removeEventListener?(
+      event: "disconnected" | "ready",
+      listener: () => void,
+    ): void;
     subscribeMessage<T>(
       callback: (value: T) => void,
       message: Message,

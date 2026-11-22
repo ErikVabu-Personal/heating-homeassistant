@@ -45,3 +45,16 @@ npm run build
 Dependencies are pinned by `package-lock.json`. CI uses the existing checksum-verified Node 22, validates both
 Python versions, runs frontend checks, rebuilds both committed bundles and rejects bundle drift. The production
 card uses HA theme variables, local SVG icons and no external fonts, scripts or style requests.
+
+
+### Reloads and boiler handover
+
+The card shows a reconnecting notice and pauses controls during an entry reload or connection interruption.
+It retries after 1, 2, 4, 8, 16 and at most 30 seconds, and reconnects promptly when the connection is ready.
+Subscriptions end with an explicit unload event; identical snapshots are not pushed.
+
+Shadow control is separate from Settings. Enabling shadow immediately pauses boiler commands. Disabling shadow
+requires confirmation inside the card that Central Heating will start sending commands to the boiler controller.
+Saving temperature/retry settings never changes shadow. Display times follow HA's locale and time-format preference;
+away date-picker payloads remain local wall-clock time in HA's configured server zone. The bundle URL includes its
+content hash so a changed build cannot keep the old cache key. Missing assigned TRVs remain visible in the room editor.

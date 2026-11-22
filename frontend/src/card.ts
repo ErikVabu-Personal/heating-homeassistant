@@ -30,6 +30,8 @@ export class CentralHeatingCard extends LitElement {
     quickTarget: { state: true },
     duration: { state: true },
     deleting: { state: true },
+    reconnecting: { state: true },
+    shadowConfirm: { state: true },
   };
   status?: Status;
   tab: Tab = "Overview";
@@ -42,6 +44,11 @@ export class CentralHeatingCard extends LitElement {
   quickTarget = 21;
   duration = "next_block";
   deleting: string | null = null;
+  reconnecting = false;
+  shadowConfirm = false;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private retryAttempt = 0;
+  private removeConnectionListeners?: () => void;
   private config: CardConfig = { type: "custom:central-heating-card" };
   private _hass?: Hass;
   private client?: HeatingClient;
@@ -55,10 +62,19 @@ export class CentralHeatingCard extends LitElement {
       this._hass = undefined;
       return;
     }
-    const changed = this._hass?.connection !== value.connection;
+    const previous = this._hass;
+    const changed = previous?.connection !== value.connection;
+    const relevant =
+      changed ||
+      previous?.locale !== value.locale ||
+      previous?.user !== value.user ||
+      previous?.config?.time_zone !== value.config?.time_zone ||
+      previous?.areas !== value.areas ||
+      (this.tab === "Rooms" && previous?.states !== value.states);
     if (changed) this.disconnect();
     this._hass = value;
-    this.requestUpdate();
+    if (relevant) this.requestUpdate();
+    this.watchConnection();
     if (changed || !this.client) void this.connect();
   }
   get hass() {
@@ -74,10 +90,12 @@ export class CentralHeatingCard extends LitElement {
       this.status = undefined;
     }
     this.requestUpdate();
+    this.watchConnection();
     void this.connect();
   }
   connectedCallback() {
     super.connectedCallback();
+    this.watchConnection();
     void this.connect();
   }
   disconnectedCallback() {
@@ -86,15 +104,69 @@ export class CentralHeatingCard extends LitElement {
   }
   private disconnect() {
     this.generation++;
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    this.releaseSubscription();
+    this.removeConnectionListeners?.();
+    this.removeConnectionListeners = undefined;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.reconnecting = false;
+    this.retryAttempt = 0;
     this.client = undefined;
     this.connecting = false;
     this.busy = false;
   }
+  private releaseSubscription() {
+    const unsubscribe = this.unsubscribe;
+    this.unsubscribe = undefined;
+    if (unsubscribe) {
+      try {
+        Promise.resolve(unsubscribe()).catch(() => undefined);
+      } catch {
+        /* Socket may already have ended this subscription. */
+      }
+    }
+  }
+  private watchConnection() {
+    if (this.removeConnectionListeners || !this.isConnected) return;
+    const connection = this._hass?.connection;
+    if (!connection) return;
+    const dropped = () => this.retryConnection();
+    const ready = () => {
+      if (this.reconnecting) {
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.retryTimer = undefined;
+        void this.connect();
+      }
+    };
+    connection.addEventListener?.("disconnected", dropped);
+    connection.addEventListener?.("ready", ready);
+    this.removeConnectionListeners = () => {
+      connection.removeEventListener?.("disconnected", dropped);
+      connection.removeEventListener?.("ready", ready);
+    };
+  }
+  private retryConnection() {
+    if (!this.isConnected || this.retryTimer) return;
+    this.generation++;
+    this.releaseSubscription();
+    this.client = undefined;
+    this.connecting = false;
+    this.busy = false;
+    this.reconnecting = true;
+    this.error = "";
+    const delay = Math.min(1000 * 2 ** this.retryAttempt++, 30000);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.connect();
+    }, delay);
+  }
   private async connect() {
     if (!this._hass || !this.isConnected || this.connecting || this.client)
       return;
+    if (this._hass.connection.connected === false) {
+      this.retryConnection();
+      return;
+    }
     this.connecting = true;
     const generation = this.generation;
     try {
@@ -115,16 +187,32 @@ export class CentralHeatingCard extends LitElement {
       this.status = status;
       const unsub = await client.subscribe((value) => {
         if (generation === this.generation) {
+          if ("unloaded" in value) {
+            this.unsubscribe = undefined;
+            this.retryConnection();
+            return;
+          }
           this.status = value;
           this.error = "";
         }
       });
-      if (generation === this.generation) this.unsubscribe = unsub;
-      else unsub();
+      if (generation === this.generation) {
+        this.unsubscribe = unsub;
+        this.reconnecting = false;
+        this.retryAttempt = 0;
+        this.error = "";
+      } else {
+        try {
+          Promise.resolve(unsub()).catch(() => undefined);
+        } catch {
+          /* Already unloaded. */
+        }
+      }
     } catch (error) {
       if (generation === this.generation) {
         this.client = undefined;
         this.error = this.message(error);
+        this.retryConnection();
       }
     } finally {
       if (generation === this.generation) this.connecting = false;
@@ -138,7 +226,7 @@ export class CentralHeatingCard extends LitElement {
         : "Unable to save. Please try again.";
   }
   private get writable() {
-    return this._hass?.user?.is_admin === true;
+    return this._hass?.user?.is_admin === true && !this.reconnecting;
   }
   private async write(
     command: string,
@@ -191,6 +279,11 @@ export class CentralHeatingCard extends LitElement {
           ? html`<span class="badge shadow">${shield} Shadow mode</span>`
           : nothing}
       </header>
+      ${this.reconnecting
+        ? html`<div class="notice" role="status">
+            Reconnecting… readings paused while the heating instance reconnects.
+          </div>`
+        : nothing}
       <nav role="tablist" aria-label="Heating views" @keydown=${this.tabKey}>
         ${tabs.map(
           (tab) =>
@@ -233,7 +326,7 @@ export class CentralHeatingCard extends LitElement {
         ? html`<div class="notice muted">
             Read-only access. An administrator can change heating settings.
           </div>`
-        : nothing}${this.quickDialog(s)}</ha-card
+        : nothing}${this.quickDialog(s)}${this.shadowDialog()}</ha-card
     >`;
   }
   private tabKey = async (event: KeyboardEvent) => {
@@ -357,11 +450,13 @@ export class CentralHeatingCard extends LitElement {
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${room.demanding
-                    ? "Calling for heat"
-                    : s.configuration.mode.value === "manual"
-                      ? "Thermostat controlled"
-                      : "Comfort on schedule"}</small
+                  >${room.override_until
+                    ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+                    : room.demanding
+                      ? "Calling for heat"
+                      : s.configuration.mode.value === "manual"
+                        ? "Thermostat controlled"
+                        : "Comfort on schedule"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until
@@ -371,6 +466,7 @@ export class CentralHeatingCard extends LitElement {
                         ${time(
                           room.override_until,
                           this.hass?.config?.time_zone,
+                          this.hass?.locale,
                         )}</span
                       >`
                     : nothing}${room.sync_problem
@@ -417,7 +513,10 @@ export class CentralHeatingCard extends LitElement {
     const room = this.status?.rooms[id];
     if (!room) return;
     this.quickRoom = id;
-    this.quickTarget = room.desired ?? room.target ?? 21;
+    this.quickTarget = Math.max(
+      5,
+      Math.min(30, Math.round((room.desired ?? room.target ?? 21) * 2) / 2),
+    );
     this.duration = "next_block";
     await this.updateComplete;
     this.renderRoot
@@ -627,12 +726,20 @@ export class CentralHeatingCard extends LitElement {
   }
   private roomForm(s: Status) {
     const draft = this.editing!;
-    const used = new Set(
-      Object.entries(s.configuration.rooms)
+    const used = new Set([
+      ...(s.used_trv_ids ?? []),
+      ...Object.entries(s.configuration.rooms)
         .filter(([id]) => id !== draft.id)
         .flatMap(([, room]) => room.trvs),
-    );
-    const entities = Object.entries(this.hass?.states ?? {}).filter(
+    ]);
+    const available = { ...this.hass?.states };
+    for (const id of draft.room.trvs)
+      if (!available[id])
+        available[id] = {
+          state: "unavailable",
+          attributes: { friendly_name: `${id} (missing)` },
+        };
+    const entities = Object.entries(available).filter(
       ([id]) =>
         id.startsWith("climate.") &&
         !used.has(id) &&
@@ -953,26 +1060,100 @@ export class CentralHeatingCard extends LitElement {
               >
             </div>
           </section>
-          <section class="setting-section">
-            <legend>Boiler output</legend>
-            <label class="check"
-              ><input
-                type="checkbox"
-                name="shadow"
-                .checked=${s.configuration.shadow}
-              />Shadow mode</label
-            ><small
-              >Computes boiler demand without sending boiler commands. Room
-              schedules still apply; use manual mode to pause them.</small
-            >
-          </section>
           <div class="actions">
             <button class="primary" type="submit">
               ${this.busy ? "Saving…" : "Save settings"}
             </button>
           </div>
         </fieldset>
-      </form>`;
+      </form>
+      <section class="panel" style="margin-top:20px">
+        <h2>Boiler output</h2>
+        <p class="muted">
+          ${s.configuration.shadow
+            ? "Shadow mode is on. Boiler commands are paused."
+            : "Shadow mode is off. Boiler commands are enabled."}
+        </p>
+        <small
+          >Room schedules still apply; use manual mode to pause them.</small
+        >
+        <div class="actions">
+          <button
+            id="shadow-action"
+            ?disabled=${!this.writable || this.busy}
+            @click=${() => this.changeShadow()}
+          >
+            ${s.configuration.shadow ? "Turn shadow off…" : "Turn shadow on"}
+          </button>
+        </div>
+      </section>`;
+  }
+  private async changeShadow() {
+    if (!this.status) return;
+    if (this.status.configuration.shadow) {
+      this.shadowConfirm = true;
+      await this.updateComplete;
+      this.renderRoot
+        .querySelector<HTMLDialogElement>("#shadow-dialog")
+        ?.showModal();
+    } else
+      await this.write(
+        "settings/save",
+        { shadow: true },
+        "Shadow mode enabled. Boiler commands are paused.",
+      );
+  }
+  private shadowDialog() {
+    if (!this.shadowConfirm) return nothing;
+    return html`<dialog
+      id="shadow-dialog"
+      @close=${() => {
+        this.shadowConfirm = false;
+      }}
+      @cancel=${() => {
+        this.shadowConfirm = false;
+      }}
+    >
+      <h2>Turn shadow mode off?</h2>
+      <p>
+        Central Heating will start sending commands to the boiler controller
+      </p>
+      <p class="muted">The computed heating demand will control the boiler.</p>
+      <div class="actions">
+        <button
+          id="cancel-shadow"
+          @click=${() => {
+            this.renderRoot
+              .querySelector<HTMLDialogElement>("#shadow-dialog")
+              ?.close();
+            this.shadowConfirm = false;
+          }}
+        >
+          Keep shadow on</button
+        ><button
+          id="confirm-shadow"
+          class="primary"
+          ?disabled=${this.busy || !this.writable}
+          @click=${async () => {
+            if (
+              await this.write(
+                "settings/save",
+                { shadow: false },
+                "Shadow mode disabled. Boiler commands are enabled.",
+              )
+            ) {
+              this.renderRoot
+                .querySelector<HTMLDialogElement>("#shadow-dialog")
+                ?.close();
+              this.shadowConfirm = false;
+            }
+          }}
+        >
+          Turn shadow off
+        </button>
+      </div>
+      ${this.error ? html`<p role="alert">${this.error}</p>` : nothing}
+    </dialog>`;
   }
   private numberField(
     name: string,
@@ -1011,11 +1192,7 @@ export class CentralHeatingCard extends LitElement {
       retry_seconds: Number(data.get("retry_seconds")),
       sync_rooms_on_knob_change: data.has("sync_rooms_on_knob_change"),
     };
-    await this.write(
-      "settings/save",
-      { settings, shadow: data.has("shadow") },
-      "Heating settings saved.",
-    );
+    await this.write("settings/save", { settings }, "Heating settings saved.");
   };
 }
 class CentralHeatingEditor extends LitElement {

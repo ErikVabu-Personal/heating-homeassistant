@@ -1,4 +1,4 @@
-import type { Entry, Hass, Message, Status } from "./types";
+import type { Entry, Hass, Message, Status, SubscriptionEvent } from "./types";
 export class HeatingClient {
   constructor(
     private hass: Hass,
@@ -12,7 +12,9 @@ export class HeatingClient {
   get(): Promise<Status> {
     return this.hass.callWS(this.message("get"));
   }
-  subscribe(callback: (status: Status) => void): Promise<() => void> {
+  subscribe(
+    callback: (status: SubscriptionEvent) => void,
+  ): Promise<() => void> {
     return this.hass.connection.subscribeMessage(
       callback,
       this.message("subscribe"),

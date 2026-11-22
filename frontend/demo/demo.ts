@@ -5,6 +5,10 @@ import type { Hass, Message, Room, Profile, Status } from "../src/types";
 let status = fixture();
 let nextId = 1;
 const listeners = new Set<(value: Status) => void>();
+const connectionEvents = {
+  disconnected: new Set<() => void>(),
+  ready: new Set<() => void>(),
+};
 function notify() {
   for (const listener of listeners) listener(structuredClone(status));
 }
@@ -114,10 +118,18 @@ function respond(message: Message): unknown {
 }
 const hass: Hass = {
   config: { time_zone: "UTC" },
+  locale: { language: "en-GB", time_format: "24", time_zone: "server" },
   async callWS<T>(message: Message) {
     return respond(message) as T;
   },
   connection: {
+    connected: true,
+    addEventListener(event, listener) {
+      connectionEvents[event].add(listener);
+    },
+    removeEventListener(event, listener) {
+      connectionEvents[event].delete(listener);
+    },
     async subscribeMessage<T>(callback: (value: T) => void) {
       const listener = (value: Status) => callback(value as T);
       listeners.add(listener);
@@ -177,5 +189,12 @@ document.querySelector("#width")!.addEventListener("change", (e) => {
 document.querySelector<HTMLSelectElement>("#width")!.value = width;
 document.querySelector("#reset")!.addEventListener("click", () => {
   status = fixture();
+  hass.connection.connected = true;
+  connectionEvents.ready.forEach((listener) => listener());
   notify();
+});
+
+document.querySelector("#simulate-drop")!.addEventListener("click", () => {
+  hass.connection.connected = false;
+  connectionEvents.disconnected.forEach((listener) => listener());
 });

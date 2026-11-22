@@ -1,3 +1,4 @@
+import type { Locale } from "./types";
 export function temperature(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value)
     ? "—"
@@ -6,12 +7,25 @@ export function temperature(value: number | null | undefined): string {
 export function time(
   value: string | null | undefined,
   timeZone?: string,
+  locale?: Locale,
 ): string {
   return value
-    ? new Intl.DateTimeFormat(undefined, {
+    ? new Intl.DateTimeFormat(locale?.language, {
         hour: "2-digit",
         minute: "2-digit",
-        timeZone,
+        hourCycle:
+          locale?.time_format === "24"
+            ? "h23"
+            : locale?.time_format === "12"
+              ? "h12"
+              : undefined,
+        hour12:
+          locale?.time_format === "system"
+            ? new Intl.DateTimeFormat(undefined, {
+                hour: "numeric",
+              }).resolvedOptions().hour12
+            : undefined,
+        timeZone: locale?.time_zone === "local" ? undefined : timeZone,
       }).format(new Date(value))
     : "—";
 }

@@ -80,12 +80,22 @@
             ? "—"
             : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)}°`;
     }
-    function time(value, timeZone) {
+    function time(value, timeZone, locale) {
         return value
-            ? new Intl.DateTimeFormat(undefined, {
+            ? new Intl.DateTimeFormat(locale?.language, {
                 hour: "2-digit",
                 minute: "2-digit",
-                timeZone,
+                hourCycle: locale?.time_format === "24"
+                    ? "h23"
+                    : locale?.time_format === "12"
+                        ? "h12"
+                        : undefined,
+                hour12: locale?.time_format === "system"
+                    ? new Intl.DateTimeFormat(undefined, {
+                        hour: "numeric",
+                    }).resolvedOptions().hour12
+                    : undefined,
+                timeZone: locale?.time_zone === "local" ? undefined : timeZone,
             }).format(new Date(value))
             : "—";
     }
@@ -491,7 +501,7 @@
     background: var(--ha-card-background, var(--card-background-color));
     border: 1px solid var(--divider-color);
     border-radius: 16px;
-    width: min(480px, calc(100vw - 32px));
+    width: min(480px, calc(100cqw - 32px), calc(100vw - 32px));
     padding: 26px;
     max-height: 90dvh;
     overflow: auto;
@@ -632,6 +642,9 @@
             this.quickTarget = 21;
             this.duration = "next_block";
             this.deleting = null;
+            this.reconnecting = false;
+            this.shadowConfirm = false;
+            this.retryAttempt = 0;
             this.config = { type: "custom:central-heating-card" };
             this.generation = 0;
             this.connecting = false;
@@ -710,7 +723,7 @@
                     retry_seconds: Number(data.get("retry_seconds")),
                     sync_rooms_on_knob_change: data.has("sync_rooms_on_knob_change"),
                 };
-                await this.write("settings/save", { settings, shadow: data.has("shadow") }, "Heating settings saved.");
+                await this.write("settings/save", { settings }, "Heating settings saved.");
             };
         }
         static { this.styles = styles; }
@@ -726,6 +739,8 @@
             quickTarget: { state: true },
             duration: { state: true },
             deleting: { state: true },
+            reconnecting: { state: true },
+            shadowConfirm: { state: true },
         }; }
         set hass(value) {
             if (!value) {
@@ -733,11 +748,20 @@
                 this._hass = undefined;
                 return;
             }
-            const changed = this._hass?.connection !== value.connection;
+            const previous = this._hass;
+            const changed = previous?.connection !== value.connection;
+            const relevant = changed ||
+                previous?.locale !== value.locale ||
+                previous?.user !== value.user ||
+                previous?.config?.time_zone !== value.config?.time_zone ||
+                previous?.areas !== value.areas ||
+                (this.tab === "Rooms" && previous?.states !== value.states);
             if (changed)
                 this.disconnect();
             this._hass = value;
-            this.requestUpdate();
+            if (relevant)
+                this.requestUpdate();
+            this.watchConnection();
             if (changed || !this.client)
                 void this.connect();
         }
@@ -754,10 +778,12 @@
                 this.status = undefined;
             }
             this.requestUpdate();
+            this.watchConnection();
             void this.connect();
         }
         connectedCallback() {
             super.connectedCallback();
+            this.watchConnection();
             void this.connect();
         }
         disconnectedCallback() {
@@ -766,15 +792,75 @@
         }
         disconnect() {
             this.generation++;
-            this.unsubscribe?.();
-            this.unsubscribe = undefined;
+            this.releaseSubscription();
+            this.removeConnectionListeners?.();
+            this.removeConnectionListeners = undefined;
+            if (this.retryTimer)
+                clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+            this.reconnecting = false;
+            this.retryAttempt = 0;
             this.client = undefined;
             this.connecting = false;
             this.busy = false;
         }
+        releaseSubscription() {
+            const unsubscribe = this.unsubscribe;
+            this.unsubscribe = undefined;
+            if (unsubscribe) {
+                try {
+                    Promise.resolve(unsubscribe()).catch(() => undefined);
+                }
+                catch {
+                    /* Socket may already have ended this subscription. */
+                }
+            }
+        }
+        watchConnection() {
+            if (this.removeConnectionListeners || !this.isConnected)
+                return;
+            const connection = this._hass?.connection;
+            if (!connection)
+                return;
+            const dropped = () => this.retryConnection();
+            const ready = () => {
+                if (this.reconnecting) {
+                    if (this.retryTimer)
+                        clearTimeout(this.retryTimer);
+                    this.retryTimer = undefined;
+                    void this.connect();
+                }
+            };
+            connection.addEventListener?.("disconnected", dropped);
+            connection.addEventListener?.("ready", ready);
+            this.removeConnectionListeners = () => {
+                connection.removeEventListener?.("disconnected", dropped);
+                connection.removeEventListener?.("ready", ready);
+            };
+        }
+        retryConnection() {
+            if (!this.isConnected || this.retryTimer)
+                return;
+            this.generation++;
+            this.releaseSubscription();
+            this.client = undefined;
+            this.connecting = false;
+            this.busy = false;
+            this.reconnecting = true;
+            this.error = "";
+            const delay = Math.min(1000 * 2 ** this.retryAttempt++, 30000);
+            this.retryTimer = setTimeout(() => {
+                this.retryTimer = undefined;
+                void this.connect();
+            }, delay);
+        }
         async connect() {
             if (!this._hass || !this.isConnected || this.connecting || this.client)
                 return;
+            if (this._hass.connection.connected === false) {
+                this.retryConnection();
+                return;
+            }
             this.connecting = true;
             const generation = this.generation;
             try {
@@ -795,19 +881,35 @@
                 this.status = status;
                 const unsub = await client.subscribe((value) => {
                     if (generation === this.generation) {
+                        if ("unloaded" in value) {
+                            this.unsubscribe = undefined;
+                            this.retryConnection();
+                            return;
+                        }
                         this.status = value;
                         this.error = "";
                     }
                 });
-                if (generation === this.generation)
+                if (generation === this.generation) {
                     this.unsubscribe = unsub;
-                else
-                    unsub();
+                    this.reconnecting = false;
+                    this.retryAttempt = 0;
+                    this.error = "";
+                }
+                else {
+                    try {
+                        Promise.resolve(unsub()).catch(() => undefined);
+                    }
+                    catch {
+                        /* Already unloaded. */
+                    }
+                }
             }
             catch (error) {
                 if (generation === this.generation) {
                     this.client = undefined;
                     this.error = this.message(error);
+                    this.retryConnection();
                 }
             }
             finally {
@@ -823,7 +925,7 @@
                     : "Unable to save. Please try again.";
         }
         get writable() {
-            return this._hass?.user?.is_admin === true;
+            return this._hass?.user?.is_admin === true && !this.reconnecting;
         }
         async write(command, fields, success) {
             if (!this.client || this.busy)
@@ -877,6 +979,11 @@
             ? b `<span class="badge shadow">${shield} Shadow mode</span>`
             : A}
       </header>
+      ${this.reconnecting
+            ? b `<div class="notice" role="status">
+            Reconnecting… readings paused while the heating instance reconnects.
+          </div>`
+            : A}
       <nav role="tablist" aria-label="Heating views" @keydown=${this.tabKey}>
         ${tabs.map((tab) => b `<button
               role="tab"
@@ -916,7 +1023,7 @@
             ? b `<div class="notice muted">
             Read-only access. An administrator can change heating settings.
           </div>`
-            : A}${this.quickDialog(s)}</ha-card
+            : A}${this.quickDialog(s)}${this.shadowDialog()}</ha-card
     >`;
         }
         overview(s) {
@@ -1012,18 +1119,20 @@
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${room.demanding
-            ? "Calling for heat"
-            : s.configuration.mode.value === "manual"
-                ? "Thermostat controlled"
-                : "Comfort on schedule"}</small
+                  >${room.override_until
+            ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+            : room.demanding
+                ? "Calling for heat"
+                : s.configuration.mode.value === "manual"
+                    ? "Thermostat controlled"
+                    : "Comfort on schedule"}</small
                 >
                 <div class="room-tags">
                   ${room.override_until
             ? b `<span class="badge"
                         >${temperature(s.configuration.overrides[id]?.target)}
                         until
-                        ${time(room.override_until, this.hass?.config?.time_zone)}</span
+                        ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}</span
                       >`
             : A}${room.sync_problem
             ? b `<span class="badge warning"
@@ -1061,7 +1170,7 @@
             if (!room)
                 return;
             this.quickRoom = id;
-            this.quickTarget = room.desired ?? room.target ?? 21;
+            this.quickTarget = Math.max(5, Math.min(30, Math.round((room.desired ?? room.target ?? 21) * 2) / 2));
             this.duration = "next_block";
             await this.updateComplete;
             this.renderRoot
@@ -1247,10 +1356,20 @@
         }
         roomForm(s) {
             const draft = this.editing;
-            const used = new Set(Object.entries(s.configuration.rooms)
-                .filter(([id]) => id !== draft.id)
-                .flatMap(([, room]) => room.trvs));
-            const entities = Object.entries(this.hass?.states ?? {}).filter(([id]) => id.startsWith("climate.") &&
+            const used = new Set([
+                ...(s.used_trv_ids ?? []),
+                ...Object.entries(s.configuration.rooms)
+                    .filter(([id]) => id !== draft.id)
+                    .flatMap(([, room]) => room.trvs),
+            ]);
+            const available = { ...this.hass?.states };
+            for (const id of draft.room.trvs)
+                if (!available[id])
+                    available[id] = {
+                        state: "unavailable",
+                        attributes: { friendly_name: `${id} (missing)` },
+                    };
+            const entities = Object.entries(available).filter(([id]) => id.startsWith("climate.") &&
                 !used.has(id) &&
                 !(s.room_entity_ids ?? []).includes(id));
             const profiles = Object.entries(s.configuration.profiles);
@@ -1471,26 +1590,93 @@
               >
             </div>
           </section>
-          <section class="setting-section">
-            <legend>Boiler output</legend>
-            <label class="check"
-              ><input
-                type="checkbox"
-                name="shadow"
-                .checked=${s.configuration.shadow}
-              />Shadow mode</label
-            ><small
-              >Computes boiler demand without sending boiler commands. Room
-              schedules still apply; use manual mode to pause them.</small
-            >
-          </section>
           <div class="actions">
             <button class="primary" type="submit">
               ${this.busy ? "Saving…" : "Save settings"}
             </button>
           </div>
         </fieldset>
-      </form>`;
+      </form>
+      <section class="panel" style="margin-top:20px">
+        <h2>Boiler output</h2>
+        <p class="muted">
+          ${s.configuration.shadow
+            ? "Shadow mode is on. Boiler commands are paused."
+            : "Shadow mode is off. Boiler commands are enabled."}
+        </p>
+        <small
+          >Room schedules still apply; use manual mode to pause them.</small
+        >
+        <div class="actions">
+          <button
+            id="shadow-action"
+            ?disabled=${!this.writable || this.busy}
+            @click=${() => this.changeShadow()}
+          >
+            ${s.configuration.shadow ? "Turn shadow off…" : "Turn shadow on"}
+          </button>
+        </div>
+      </section>`;
+        }
+        async changeShadow() {
+            if (!this.status)
+                return;
+            if (this.status.configuration.shadow) {
+                this.shadowConfirm = true;
+                await this.updateComplete;
+                this.renderRoot
+                    .querySelector("#shadow-dialog")
+                    ?.showModal();
+            }
+            else
+                await this.write("settings/save", { shadow: true }, "Shadow mode enabled. Boiler commands are paused.");
+        }
+        shadowDialog() {
+            if (!this.shadowConfirm)
+                return A;
+            return b `<dialog
+      id="shadow-dialog"
+      @close=${() => {
+            this.shadowConfirm = false;
+        }}
+      @cancel=${() => {
+            this.shadowConfirm = false;
+        }}
+    >
+      <h2>Turn shadow mode off?</h2>
+      <p>
+        Central Heating will start sending commands to the boiler controller
+      </p>
+      <p class="muted">The computed heating demand will control the boiler.</p>
+      <div class="actions">
+        <button
+          id="cancel-shadow"
+          @click=${() => {
+            this.renderRoot
+                .querySelector("#shadow-dialog")
+                ?.close();
+            this.shadowConfirm = false;
+        }}
+        >
+          Keep shadow on</button
+        ><button
+          id="confirm-shadow"
+          class="primary"
+          ?disabled=${this.busy || !this.writable}
+          @click=${async () => {
+            if (await this.write("settings/save", { shadow: false }, "Shadow mode disabled. Boiler commands are enabled.")) {
+                this.renderRoot
+                    .querySelector("#shadow-dialog")
+                    ?.close();
+                this.shadowConfirm = false;
+            }
+        }}
+        >
+          Turn shadow off
+        </button>
+      </div>
+      ${this.error ? b `<p role="alert">${this.error}</p>` : A}
+    </dialog>`;
         }
         numberField(name, label, value, min, max, step, hint) {
             return b `<div class="field">
@@ -1675,6 +1861,10 @@
     let status = fixture();
     let nextId = 1;
     const listeners = new Set();
+    const connectionEvents = {
+        disconnected: new Set(),
+        ready: new Set(),
+    };
     function notify() {
         for (const listener of listeners)
             listener(structuredClone(status));
@@ -1784,10 +1974,18 @@
     }
     const hass = {
         config: { time_zone: "UTC" },
+        locale: { language: "en-GB", time_format: "24", time_zone: "server" },
         async callWS(message) {
             return respond(message);
         },
         connection: {
+            connected: true,
+            addEventListener(event, listener) {
+                connectionEvents[event].add(listener);
+            },
+            removeEventListener(event, listener) {
+                connectionEvents[event].delete(listener);
+            },
             async subscribeMessage(callback) {
                 const listener = (value) => callback(value);
                 listeners.add(listener);
@@ -1839,7 +2037,13 @@
     document.querySelector("#width").value = width;
     document.querySelector("#reset").addEventListener("click", () => {
         status = fixture();
+        hass.connection.connected = true;
+        connectionEvents.ready.forEach((listener) => listener());
         notify();
+    });
+    document.querySelector("#simulate-drop").addEventListener("click", () => {
+        hass.connection.connected = false;
+        connectionEvents.disconnected.forEach((listener) => listener());
     });
 
 })();

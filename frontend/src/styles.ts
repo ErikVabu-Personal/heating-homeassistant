@@ -375,7 +375,7 @@ export const styles = css`
     background: var(--ha-card-background, var(--card-background-color));
     border: 1px solid var(--divider-color);
     border-radius: 16px;
-    width: min(480px, calc(100vw - 32px));
+    width: min(480px, calc(100cqw - 32px), calc(100vw - 32px));
     padding: 26px;
     max-height: 90dvh;
     overflow: auto;

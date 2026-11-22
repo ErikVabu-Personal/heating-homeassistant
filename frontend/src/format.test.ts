@@ -29,3 +29,22 @@ it("uses the HA zone even when browser timezone differs", () => {
     "2026-11-22T02:30",
   );
 });
+
+it("honors HA 24-hour formatting even when its language normally uses 12-hour time", () => {
+  expect(
+    time("2026-11-22T18:45:00Z", "Europe/Berlin", {
+      language: "en-US",
+      time_format: "24",
+      time_zone: "server",
+    }),
+  ).toBe("19:45");
+});
+it("honors HA 12-hour formatting even when its language normally uses 24-hour time", () => {
+  expect(
+    time("2026-11-22T18:45:00Z", "Europe/Berlin", {
+      language: "en-GB",
+      time_format: "12",
+      time_zone: "server",
+    }),
+  ).toMatch(/^07:45\s*pm$/i);
+});
