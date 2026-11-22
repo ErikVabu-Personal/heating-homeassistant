@@ -339,6 +339,40 @@ Override `minutes` accepts 1–10080. Every field has a translated name and desc
 
 Every command validates with voluptuous, returns structured errors, and never partly applies a change.
 
+Subscriptions retain cleanup callbacks in a set on the entry engine. One entry-unload hook drains this set;
+normal unsubscribe/disconnect removes its own callback. Unload/reload sends a final `{"unloaded": true}` event
+before ending the subscription. The card reconnects with bounded backoff. Normal events are emitted only for
+a changed snapshot and at most once per second; repeated engine notifications with identical status are silent.
+
+Room deletion removes the room climate's entity-registry entry and any room override. Room saves reject virtual
+Central Heating climates (including renamed entities) and TRVs assigned to any other configured instance,
+including an unloaded instance's stored rooms. A shared ownership lock serializes cross-entry assignment.
+The full status includes `used_trv_ids` for other instances, for the card's physical-TRV picker.
+
+**Wire contract (part 1):** every instance-specific command carries `config_entry_id`. `get` without it lists
+loaded instances as `{entries: [{entry_id, title}], room_entity_ids: [...]}` for card configuration.
+`room_entity_ids` is also included in full status and lists every Central Heating climate entity from the
+entity registry across instances, including renamed and unloaded ones; the physical-TRV picker excludes them. Otherwise `get` and `subscribe`
+return `{config_entry_id, configuration, global, rooms}`: `configuration` is the Store JSON, `global` holds
+`demand_count`, `virtual_temp`, `virtual_temp_raw`, `virtual_setpoint`, `command`, `last_sent`, `shadow`, and
+`mode`; `rooms` maps room IDs to `name`, `entity_id` (the actual registry climate entity, or null),
+`current`, `desired`, `target`, `trvs` (entity-to-reported-target map),
+`demanding`, `sync_problem`, `override_until`, `next_change`, and `next_target`. `target` includes the reported
+TRV target in manual mode; `desired` remains `null` there.
+
+Room/profile saves carry a complete `room`/`profile` object in the Store shape, with an optional existing
+`id`; omit `id` to create a random identity. Successful saves return the status plus `saved_id`. Deletes
+carry `room_id`/`profile_id`. Settings saves carry partial `settings`, optional `shadow`, or both; these fields
+validate together before a single Store update. Mode and override writes carry the service fields, using
+`room_id` for websocket overrides. `override/set` also accepts an explicit `kind`: `next_block` ignores a
+configured duration default and cannot be combined with `minutes`; `duration` uses the supplied minutes or
+the configured duration. Omitting kind preserves the service/default behavior. Invalid schema and invalid-data errors leave Store and controls unchanged.
+All writes check the current user's admin status per call.
+
+A subscription returns a result acknowledgement followed by its initial status event. Later notifications
+coalesce to at most one event per second, with the latest snapshot. Unsubscribing, closing the socket, or
+unloading the entry removes the engine listener and any pending timer. Commands register once in `async_setup`.
+
 ## 9. Card
 
 - **Built with** Lit and TypeScript, bundled with rollup into a single file,

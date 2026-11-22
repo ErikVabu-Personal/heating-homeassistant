@@ -91,7 +91,13 @@ class RoomController:
         return self.schedule(room, now).current.block.target
 
     async def async_set_override(
-        self, room_id: str, target: float, minutes: int | None = None, *, source: str = "service"
+        self,
+        room_id: str,
+        target: float,
+        minutes: int | None = None,
+        *,
+        source: str = "service",
+        kind: str | None = None,
     ) -> None:
         try:
             bounded(target, 5, 30, 0.5)
@@ -100,9 +106,14 @@ class RoomController:
         room = self.room(room_id)
         if minutes is not None and (type(minutes) is not int or not 1 <= minutes <= 10080):
             raise ServiceValidationError("Override minutes must be an integer from 1 to 10080")
+        if kind not in (None, "next_block", "duration"):
+            raise ServiceValidationError("Invalid override kind")
+        if kind == "next_block" and minutes is not None:
+            raise ServiceValidationError("A next-change override cannot include minutes")
         now = dt_util.utcnow()
         settings = self.store.data.settings
-        if minutes is not None or settings.override_default == "duration":
+        selected_kind = kind or ("duration" if minutes is not None else settings.override_default)
+        if selected_kind == "duration":
             until = now + timedelta(
                 minutes=minutes if minutes is not None else settings.override_minutes
             )

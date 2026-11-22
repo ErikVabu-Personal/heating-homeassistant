@@ -24,8 +24,10 @@ def __getattr__(name: str):
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     from .services import async_register_services
+    from .websocket import async_register_websocket
 
     async_register_services(hass)
+    async_register_websocket(hass)
     return True
 
 
@@ -49,6 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryError(str(exc)) from exc
     entry.runtime_data = HeatingEngine(hass, store, DiylessAdapter(hass, entry.entry_id, prefix))
     entry.runtime_data.rooms = RoomController(entry.runtime_data, entry.entry_id)
+    entry.async_on_unload(entry.runtime_data.close_subscriptions)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await entry.runtime_data.async_start()
     entry.async_on_unload(entry.add_update_listener(_options_updated))
