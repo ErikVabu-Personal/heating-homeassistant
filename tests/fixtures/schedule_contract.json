@@ -1,0 +1,1223 @@
+[
+  {
+    "name": "valid week",
+    "valid": true,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "split move copy result",
+    "valid": true,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:05",
+            "target": 21
+          },
+          {
+            "start": "12:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:05",
+            "target": 21
+          },
+          {
+            "start": "12:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing midnight",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:05",
+            "target": 18
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "off grid",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:03",
+            "target": 21
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "duplicate",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "00:00",
+            "target": 21
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "unordered",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "22:00",
+            "target": 21
+          },
+          {
+            "start": "06:00",
+            "target": 18
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "off step",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 20.25
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "too cold",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 4.5
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "too hot",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 30.5
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "invalid clock",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "24:00",
+            "target": 21
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "empty day",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sun": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing day",
+    "valid": false,
+    "profile": {
+      "name": "Profile A",
+      "days": {
+        "mon": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "tue": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "wed": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "thu": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "fri": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ],
+        "sat": [
+          {
+            "start": "00:00",
+            "target": 18
+          },
+          {
+            "start": "06:00",
+            "target": 21
+          },
+          {
+            "start": "22:00",
+            "target": 18
+          }
+        ]
+      }
+    }
+  }
+]

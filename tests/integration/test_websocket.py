@@ -396,6 +396,15 @@ async def test_actual_unload_or_reload_sends_final_unloaded_event(hass, client, 
     assert response["type"] == "result"
     assert response["success"] is reload
     assert not engine._subscription_cleanups
+    # HA websocket client removes its old message before resubscribing (including after reconnect).
+    await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": result["id"]})
+    assert (await client.receive_json())["success"]
+    if reload:
+        new = await command(client, entry, "subscribe")
+        assert new["success"]
+        assert (await client.receive_json())["event"]["config_entry_id"] == entry.entry_id
+        await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": new["id"]})
+        assert (await client.receive_json())["success"]
     if reload:
         assert entry.runtime_data is not engine
         assert not entry.runtime_data._subscription_cleanups
@@ -457,7 +466,7 @@ async def test_room_save_rejects_renamed_virtual_thermostat_atomically(hass, cli
 
 
 @pytest.mark.parametrize("loaded", [False, True])
-async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry, loaded):
+async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry, loaded, tmp_path):
     other = MockConfigEntry(
         domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
     )
@@ -466,6 +475,17 @@ async def test_room_save_rejects_trv_owned_by_other_instance(hass, client, entry
     room = Room("Room B", ("climate.shared_trv",), profile.id)
     store = HeatingStore(hass, other.entry_id)
     await store.async_update(lambda data: replace(data, profiles=(profile,), rooms=(room,)))
+    if not loaded:
+        import json
+        from pathlib import Path
+
+        hass.config.config_dir = str(tmp_path)
+        path = Path(hass.config.path(".storage", f"{DOMAIN}.{other.entry_id}"))
+        await hass.async_add_executor_job(lambda: path.parent.mkdir(parents=True, exist_ok=True))
+        await hass.async_add_executor_job(
+            path.write_text,
+            json.dumps({"version": 1, "minor_version": 2, "data": to_json(store.data)}),
+        )
     if loaded:
         assert await hass.config_entries.async_setup(other.entry_id)
         await hass.async_block_till_done()
@@ -569,3 +589,163 @@ async def test_websocket_shadow_enable_resets_every_send_cache(client, entry):
     assert engine._last_command is None
     assert engine._last_send_tick is None
     assert engine._last_source_tick is None
+
+
+async def test_schedule_shared_frontend_fixtures_are_accepted_or_rejected_atomically(client, entry):
+    import json
+    from pathlib import Path
+
+    cases = json.loads((Path(__file__).parents[1] / "fixtures/schedule_contract.json").read_text())
+    for case in cases:
+        before = entry.runtime_data.store.data
+        result = await command(client, entry, "profile/save", profile=case["profile"])
+        assert result["success"] is case["valid"], case["name"]
+        if not case["valid"]:
+            assert entry.runtime_data.store.data is before
+
+
+@pytest.mark.parametrize("problem", [ValueError("bad data"), OSError("cannot read")])
+async def test_other_unreadable_store_does_not_break_status_subscribe_or_mode(
+    hass, client, entry, problem
+):
+    other = MockConfigEntry(
+        domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    with patch.object(HeatingStore, "async_read_only", side_effect=problem):
+        result = await command(client, entry, "get")
+        assert result["success"]
+        result = await command(client, entry, "subscribe")
+        assert result["success"]
+        assert (await client.receive_json())["type"] == "event"
+        await client.send_json_auto_id({"type": "unsubscribe_events", "subscription": result["id"]})
+        assert (await client.receive_json())["success"]
+        assert (await command(client, entry, "mode/set", mode="auto"))["success"]
+        before = entry.runtime_data.store.data
+        result = await command(
+            client,
+            entry,
+            "room/save",
+            room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": before.profiles[0].id},
+        )
+        assert not result["success"]
+        assert "storage is unreadable" in result["error"]["message"]
+        assert entry.runtime_data.store.data is before
+
+
+async def test_other_entry_ownership_never_migrates_or_saves_store(hass, client, entry, tmp_path):
+    import json
+    from pathlib import Path
+
+    other = MockConfigEntry(
+        domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    hass.config.config_dir = str(tmp_path)
+    raw = to_json(entry.runtime_data.store.data)
+    path = Path(hass.config.path(".storage", f"{DOMAIN}.{other.entry_id}"))
+    envelope = json.dumps(
+        {"version": 1, "minor_version": 1, "key": f"{DOMAIN}.{other.entry_id}", "data": raw}
+    )
+    await hass.async_add_executor_job(lambda: path.parent.mkdir(parents=True, exist_ok=True))
+    await hass.async_add_executor_job(path.write_text, envelope)
+    before = await hass.async_add_executor_job(path.stat)
+    with patch.object(
+        HeatingStore, "async_load", side_effect=AssertionError("ownership must not migrate")
+    ):
+        result = await command(client, entry, "get")
+        assert result["success"]
+        assert "climate.trv_a" in result["result"]["used_trv_ids"]
+        await hass.async_block_till_done()
+    assert await hass.async_add_executor_job(path.read_text) == envelope
+    assert (await hass.async_add_executor_job(path.stat)).st_mtime_ns == before.st_mtime_ns
+
+
+async def test_read_only_store_rejects_newer_minor_version_l05(hass, client, entry, tmp_path):
+    import json
+    from pathlib import Path
+
+    other = MockConfigEntry(
+        domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    hass.config.config_dir = str(tmp_path)
+    path = Path(hass.config.path(".storage", f"{DOMAIN}.{other.entry_id}"))
+    await hass.async_add_executor_job(lambda: path.parent.mkdir(parents=True, exist_ok=True))
+    envelope = json.dumps(
+        {"version": 1, "minor_version": 4, "data": to_json(entry.runtime_data.store.data)}
+    )
+    await hass.async_add_executor_job(path.write_text, envelope)
+    with pytest.raises(ValueError, match="Unsupported heating Store version"):
+        await HeatingStore.async_read_only(hass, other.entry_id)
+    assert (await command(client, entry, "get"))["success"]
+    before = entry.runtime_data.store.data
+    result = await command(
+        client,
+        entry,
+        "room/save",
+        room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": before.profiles[0].id},
+    )
+    assert not result["success"]
+    assert "storage is unreadable" in result["error"]["message"]
+    assert entry.runtime_data.store.data is before
+    assert await hass.async_add_executor_job(path.read_text) == envelope
+
+
+@pytest.mark.parametrize("kind", ["next_block", "duration"])
+@pytest.mark.parametrize("mode", ["auto", "manual"])
+async def test_profile_edit_recomputes_only_next_change_override_after_reload(
+    hass, client, entry, freezer, kind, mode
+):
+    from datetime import timedelta
+
+    freezer.move_to("2026-01-05T10:00:00+00:00")
+    await hass.config.async_set_time_zone("UTC")
+    assert (await command(client, entry, "mode/set", mode=mode))["success"]
+    room = entry.runtime_data.store.data.rooms[0]
+    result = await command(
+        client,
+        entry,
+        "override/set",
+        room_id=room.id,
+        temperature=23,
+        kind=kind,
+        **({"minutes": 120} if kind == "duration" else {}),
+    )
+    assert result["success"]
+    before = entry.runtime_data.store.data.overrides[0]
+    assert before.kind == kind
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.store.data.overrides[0].kind == kind
+    calls = []
+
+    async def apply(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", apply)
+    payload = {
+        "id": room.profile_id,
+        "name": "Edited profile",
+        "days": {
+            day: [
+                {"start": "00:00", "target": 18},
+                {"start": "11:00", "target": 21},
+                {"start": "22:00", "target": 18},
+            ]
+            for day in WEEKDAYS
+        },
+    }
+    result = await command(client, entry, "profile/save", profile=payload)
+    assert result["success"]
+    after = entry.runtime_data.store.data.overrides[0]
+    assert after.target == 23 and after.kind == kind
+    assert after.until == (
+        dt_util.utcnow() + timedelta(hours=1) if kind == "next_block" else before.until
+    )
+    if mode == "manual":
+        assert not calls
+    # A later apply must not move the already recomputed expiry again.
+    freezer.tick(timedelta(minutes=5))
+    await entry.runtime_data.async_data_changed()
+    assert entry.runtime_data.store.data.overrides[0].until == after.until

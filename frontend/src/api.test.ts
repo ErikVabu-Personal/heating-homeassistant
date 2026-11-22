@@ -54,3 +54,18 @@ describe("override payloads", () => {
       expect(() => overridePayload("room_a", 22, "custom", minutes)).toThrow();
   });
 });
+
+it("write payload fields cannot replace command type or config entry identity (C05)", async () => {
+  const callWS = vi.fn().mockResolvedValue({});
+  const client = new HeatingClient({ callWS } as unknown as Hass, "entry_a");
+  await client.write("mode/set", {
+    type: "central_heating/room/delete",
+    config_entry_id: "entry_b",
+    mode: "auto",
+  });
+  expect(callWS).toHaveBeenCalledWith({
+    type: "central_heating/mode/set",
+    config_entry_id: "entry_a",
+    mode: "auto",
+  });
+});

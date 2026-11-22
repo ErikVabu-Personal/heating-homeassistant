@@ -23,6 +23,7 @@ export interface Override {
   target: number;
   until: string;
   source: string;
+  kind?: "next_block" | "duration";
 }
 export interface Configuration {
   settings: Settings;

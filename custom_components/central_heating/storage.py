@@ -1,11 +1,13 @@
 """Validated immutable snapshots, serialized updates and HA-managed persistence."""
 
 import asyncio
+import json
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from math import isfinite
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .const import DOMAIN
@@ -40,6 +42,7 @@ class Override:
     target: float
     until: datetime
     source: str
+    kind: str = "duration"
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,8 @@ def validate_data(data: HeatingData) -> None:
     for override in data.overrides:
         if override.room_id not in rooms or not isinstance(override.source, str):
             raise ValueError("Invalid override room or source")
+        if override.kind not in ("next_block", "duration"):
+            raise ValueError("Invalid override kind")
         bounded(override.target, 5, 30, 0.5)
         aware(override.until)
 
@@ -142,6 +147,7 @@ def to_json(data: HeatingData) -> dict[str, Any]:
                 "target": item.target,
                 "until": item.until.isoformat(),
                 "source": item.source,
+                "kind": item.kind,
             }
             for item in data.overrides
         },
@@ -187,7 +193,11 @@ def from_json(raw: dict[str, Any]) -> HeatingData:
             ),
             overrides=tuple(
                 Override(
-                    key, value["target"], datetime.fromisoformat(value["until"]), value["source"]
+                    key,
+                    value["target"],
+                    datetime.fromisoformat(value["until"]),
+                    value["source"],
+                    value.get("kind", "duration"),
                 )
                 for key, value in raw.get("overrides", {}).items()
             ),
@@ -211,9 +221,25 @@ class HeatingStore:
                     raise ValueError("Unsupported heating Store version")
                 return to_json(from_json(raw))
 
-        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=2)
+        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=3)
         self._lock = asyncio.Lock()
         self.data = HeatingData()
+
+    @staticmethod
+    async def async_read_only(hass: HomeAssistant, entry_id: str) -> HeatingData:
+        """Read ownership without Store migration, caching, or delayed disk writes."""
+
+        def read():
+            path = Path(hass.config.path(".storage", f"{DOMAIN}.{entry_id}"))
+            try:
+                envelope = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return HeatingData()
+            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > 3:
+                raise ValueError("Unsupported heating Store version")
+            return from_json(envelope["data"])
+
+        return await hass.async_add_executor_job(read)
 
     async def async_remove(self) -> None:
         await self._store.async_remove()

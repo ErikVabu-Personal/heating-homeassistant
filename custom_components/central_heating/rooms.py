@@ -49,6 +49,7 @@ class RoomController:
         self.problems: set[str] = set()
         self._timer = None
         self._profiles = {room.id: room.profile_id for room in self.store.data.rooms}
+        self._profile_data = {profile.id: profile for profile in self.store.data.profiles}
 
     @property
     def zone(self) -> ZoneInfo:
@@ -122,7 +123,7 @@ class RoomController:
                 profile for profile in self.store.data.profiles if profile.id == room.profile_id
             )
             until = until_next_change(profile, now, self.zone)
-        override = Override(room_id, target, until, source)
+        override = Override(room_id, target, until, source, selected_kind)
         await self.store.async_update(
             lambda data: replace(
                 data,
@@ -229,14 +230,27 @@ class RoomController:
                 for room in self.store.data.rooms
                 if room.id in self._profiles and self._profiles[room.id] != room.profile_id
             }
+            profiles = {profile.id: profile for profile in self.store.data.profiles}
+            edited = {
+                key
+                for key, profile in profiles.items()
+                if key in self._profile_data and profile != self._profile_data[key]
+            }
+            room_profiles = {room.id: room.profile_id for room in self.store.data.rooms}
             surviving = tuple(
-                item
+                replace(
+                    item,
+                    until=until_next_change(profiles[room_profiles[item.room_id]], now, self.zone),
+                )
+                if item.kind == "next_block" and room_profiles.get(item.room_id) in edited
+                else item
                 for item in self.store.data.overrides
                 if item.until.astimezone(UTC) > now and item.room_id not in changed_profiles
             )
             if surviving != self.store.data.overrides:
                 await self.store.async_update(lambda data: replace(data, overrides=surviving))
-            self._profiles = {room.id: room.profile_id for room in self.store.data.rooms}
+            self._profiles = room_profiles
+            self._profile_data = profiles
             active = {trv for room in self.store.data.rooms if room.enabled for trv in room.trvs}
             for trv in set(self.pending) | self.problems:
                 if trv not in active or self.store.data.mode.value == "manual":

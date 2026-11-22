@@ -136,3 +136,21 @@ def test_override_target_bounds(target):
     data = example()
     with pytest.raises(ValueError):
         validate_data(replace(data, overrides=(replace(data.overrides[0], target=target),)))
+
+
+@pytest.mark.parametrize("kind", ["next_block", "duration"])
+def test_override_kind_roundtrip_and_legacy_default(kind):
+    data = example()
+    data = replace(data, overrides=(replace(data.overrides[0], kind=kind),))
+    raw = to_json(data)
+    assert from_json(raw).overrides[0].kind == kind
+    del raw["overrides"][data.rooms[0].id]["kind"]
+    legacy = from_json(raw).overrides[0]
+    assert legacy.kind == "duration"
+    assert legacy.until == data.overrides[0].until
+
+
+def test_override_kind_rejects_unknown_value():
+    data = example()
+    with pytest.raises(ValueError, match="Invalid override kind"):
+        validate_data(replace(data, overrides=(replace(data.overrides[0], kind="unknown"),)))

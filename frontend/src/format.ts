@@ -60,3 +60,29 @@ export function defaultProfile(name = "Default profile"): {
     ),
   };
 }
+
+/** Weekly starts are wall-clock values, independent of a date or DST offset. */
+export function scheduleTime(value: string, locale?: Locale): string {
+  return time(`2000-01-01T${value}:00Z`, "UTC", {
+    ...locale,
+    language:
+      locale?.language ?? new Intl.DateTimeFormat().resolvedOptions().locale,
+    time_format: locale?.time_format ?? "language",
+    time_zone: "server",
+  });
+}
+export function parseScheduleTime(value: string, locale?: Locale): string {
+  const trimmed = value.trim().replace(/^(\d):/, "0$1:");
+  // Also accept the explicit 24-hour storage notation when typed or pasted.
+  if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) return trimmed;
+  const normalize = (text: string) =>
+    text.toLocaleLowerCase(locale?.language).replace(/\s/g, "");
+  for (let minute = 0; minute < 1440; minute += 5) {
+    const clock = `${Math.floor(minute / 60)
+      .toString()
+      .padStart(2, "0")}:${(minute % 60).toString().padStart(2, "0")}`;
+    if (normalize(scheduleTime(clock, locale)) === normalize(trimmed))
+      return clock;
+  }
+  throw new Error("Enter a valid time on the five-minute grid.");
+}

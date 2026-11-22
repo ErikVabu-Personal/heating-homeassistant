@@ -1,4 +1,5 @@
 import "../src/card";
+import { profilePayload } from "../src/schedule";
 import { fixture } from "./fixture";
 import type { CentralHeatingCard } from "../src/card";
 import type { Hass, Message, Room, Profile, Status } from "../src/types";
@@ -83,6 +84,7 @@ function respond(message: Message): unknown {
               Date.now() + Number(message.minutes ?? 120) * 60000,
             ).toISOString(),
       source: "card",
+      kind: message.kind === "next_block" ? "next_block" : "duration",
     };
   } else if (command === "override/clear")
     delete status.configuration.overrides[String(message.room_id)];
@@ -98,13 +100,20 @@ function respond(message: Message): unknown {
     delete status.configuration.overrides[String(message.room_id)];
   } else if (command === "profile/save") {
     const profile = message.profile as Profile & { id?: string };
+    profilePayload(profile, profile.id);
     savedId = profile.id ?? `profile_${nextId++}`;
     const copy = { ...profile };
     delete copy.id;
     status.configuration.profiles[savedId] = copy;
-  } else if (command === "profile/delete")
+  } else if (command === "profile/delete") {
+    if (
+      Object.values(status.configuration.rooms).some(
+        (r) => r.profile_id === message.profile_id,
+      )
+    )
+      throw new Error("Profile is used by a room.");
     delete status.configuration.profiles[String(message.profile_id)];
-  else if (command === "settings/save") {
+  } else if (command === "settings/save") {
     Object.assign(status.configuration.settings, message.settings ?? {});
     if (message.shadow !== undefined)
       status.configuration.shadow = Boolean(message.shadow);

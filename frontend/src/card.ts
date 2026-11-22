@@ -1,6 +1,7 @@
 import { LitElement, html, nothing, svg, type TemplateResult } from "lit";
 import { HeatingClient, overridePayload } from "./api";
 import { defaultProfile, localDateTime, temperature, time } from "./format";
+import "./schedules";
 import { styles } from "./styles";
 import type {
   CardConfig,
@@ -188,7 +189,6 @@ export class CentralHeatingCard extends LitElement {
       const unsub = await client.subscribe((value) => {
         if (generation === this.generation) {
           if ("unloaded" in value) {
-            this.unsubscribe = undefined;
             this.retryConnection();
             return;
           }
@@ -303,7 +303,12 @@ export class CentralHeatingCard extends LitElement {
             </button>`,
         )}
       </nav>
-      <main id="view" role="tabpanel" aria-labelledby=${`tab-${this.tab}`}>
+      <main
+        id="view"
+        role="tabpanel"
+        class=${this.reconnecting ? "stale" : ""}
+        aria-labelledby=${`tab-${this.tab}`}
+      >
         ${s
           ? this.tab === "Overview"
             ? this.overview(s)
@@ -311,18 +316,21 @@ export class CentralHeatingCard extends LitElement {
               ? this.rooms(s)
               : this.tab === "Settings"
                 ? this.settings(s)
-                : this.schedules(s)
+                : nothing
           : html`<p class="muted">
               ${this.error
                 ? "Heating information is unavailable."
                 : "Connecting to Central Heating…"}
             </p>`}
+        <div ?hidden=${this.tab !== "Schedules"}>
+          ${s ? this.schedules(s) : nothing}
+        </div>
       </main>
       ${this.error
         ? html`<div class="notice error" role="alert">${this.error}</div>`
         : nothing}${this.notice
         ? html`<div class="notice" role="status">${this.notice}</div>`
-        : nothing}${!this.writable && s
+        : nothing}${!this.writable && !this.reconnecting && s
         ? html`<div class="notice muted">
             Read-only access. An administrator can change heating settings.
           </div>`
@@ -450,12 +458,12 @@ export class CentralHeatingCard extends LitElement {
                   <h3>${room.name}</h3>
                 </div>
                 <small
-                  >${room.override_until
-                    ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
-                    : room.demanding
-                      ? "Calling for heat"
-                      : s.configuration.mode.value === "manual"
-                        ? "Thermostat controlled"
+                  >${s.configuration.mode.value !== "auto"
+                    ? `${s.configuration.mode.value[0].toUpperCase() + s.configuration.mode.value.slice(1)} · ${temperature(room.desired ?? room.target)}`
+                    : room.override_until
+                      ? `Override until ${time(room.override_until, this.hass?.config?.time_zone, this.hass?.locale)}`
+                      : room.demanding
+                        ? "Calling for heat"
                         : "Comfort on schedule"}</small
                 >
                 <div class="room-tags">
@@ -946,38 +954,26 @@ export class CentralHeatingCard extends LitElement {
       this.editing = null;
   };
   private schedules(s: Status) {
-    return html`<div class="toolbar">
-        <div>
-          <h2>Weekly profiles</h2>
-          <p class="muted">A clear plan for every room.</p>
-        </div>
-        <span class="badge">Preview</span>
-      </div>
-      <div class="panel">
-        <p>
-          The week-grid editor is coming in the next update. Your existing
-          profiles keep running.
-        </p>
-        ${Object.entries(s.configuration.profiles).map(
-          ([id, profile]) =>
-            html`<div class="profile-row">
-              <div>
-                <h3>${profile.name}</h3>
-                <small
-                  >${Object.values(s.configuration.rooms)
-                    .filter((room) => room.profile_id === id)
-                    .map((room) => room.name)
-                    .join(", ") || "No rooms assigned"}</small
-                >
-              </div>
-              <span class="badge">Weekly schedule</span>
-            </div>`,
-        )}${!Object.keys(s.configuration.profiles).length
-          ? html`<p class="muted">
-              No profiles yet. Add a room to create a simple default profile.
-            </p>`
-          : nothing}
-      </div>`;
+    return html`<heating-schedules
+      .status=${s}
+      .hass=${this.hass}
+      .writable=${this.writable}
+      .saveProfile=${async (profile: unknown) => {
+        if (!(await this.write("profile/save", { profile }, "Profile saved.")))
+          throw new Error(this.error || "Unable to save while reconnecting.");
+        return this.status?.saved_id;
+      }}
+      .deleteProfile=${async (id: string) => {
+        if (
+          !(await this.write(
+            "profile/delete",
+            { profile_id: id },
+            "Profile deleted.",
+          ))
+        )
+          throw new Error(this.error || "Unable to delete while reconnecting.");
+      }}
+    ></heating-schedules>`;
   }
   private settings(s: Status) {
     const settings = s.configuration.settings;

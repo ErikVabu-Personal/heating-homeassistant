@@ -127,6 +127,11 @@ export const styles = css`
     padding: 24px 28px 28px;
     min-height: 380px;
   }
+  .stale {
+    filter: grayscale(1);
+    opacity: 0.45;
+    pointer-events: none;
+  }
   .grid {
     display: grid;
     grid-template-columns: 1.4fr 1fr;
