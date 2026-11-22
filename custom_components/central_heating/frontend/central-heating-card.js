@@ -131,7 +131,7 @@ function scheduleTime(value, locale) {
     });
 }
 function parseScheduleTime(value, locale) {
-    const trimmed = value.trim();
+    const trimmed = value.trim().replace(/^(\d):/, "0$1:");
     // Also accept the explicit 24-hour storage notation when typed or pasted.
     if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed))
         return trimmed;
@@ -975,7 +975,8 @@ class HeatingSchedules extends i {
         }
     }
     get dirty() {
-        return !!this.draft && JSON.stringify(this.draft) !== this.baseline;
+        return (!!this.draft &&
+            (this.timeInputs.size > 0 || JSON.stringify(this.draft) !== this.baseline));
     }
     load(id) {
         const source = this.status?.configuration.profiles[id];
@@ -990,6 +991,7 @@ class HeatingSchedules extends i {
         this.deleting = false;
     }
     newProfile(copy = false) {
+        this.timeInputs.clear();
         this.selected = "";
         this.draft =
             copy && this.draft
@@ -1002,9 +1004,19 @@ class HeatingSchedules extends i {
         this.block = null;
         this.deleting = false;
     }
+    clearDayInputs(day) {
+        for (const key of this.timeInputs.keys())
+            if (key.startsWith(`${day}-`))
+                this.timeInputs.delete(key);
+    }
     change(day, blocks) {
         if (!this.draft || !this.writable || this.saving)
             return;
+        if (blocks.length !== this.draft.days[day].length) {
+            this.clearDayInputs(day);
+            if (this.block?.day === day)
+                this.block = null;
+        }
         this.draft = { ...this.draft, days: { ...this.draft.days, [day]: blocks } };
         this.error = "";
     }
@@ -1015,15 +1027,19 @@ class HeatingSchedules extends i {
             const at = minutes(parseScheduleTime(input.value, this.hass?.locale));
             if (at % 5)
                 throw new Error("Times must be on the five-minute grid.");
-            const blocks = moveBoundary(this.draft.days[day], index, at);
+            const dayBlocks = this.draft.days[day];
+            const previous = dayBlocks[index - 1]?.start ?? "00:00";
+            const next = dayBlocks[index + 1]?.start ?? "24:00";
+            const before = next === "24:00" ? 1440 : minutes(next);
+            if (index === 0 || at <= minutes(previous) || at >= before)
+                throw new Error(`Start time must be after ${previous} and before ${next}.`);
+            const blocks = dayBlocks.map((block, i) => i === index ? { ...block, start: clock(at) } : block);
             this.timeInputs.delete(key);
-            input.setCustomValidity("");
             this.change(day, blocks);
         }
         catch (error) {
             this.timeInputs.set(key, input.value);
             this.error = error instanceof Error ? error.message : String(error);
-            input.setCustomValidity(this.error);
         }
     }
     attempt(action) {
@@ -1103,7 +1119,7 @@ class HeatingSchedules extends i {
         const next = rooms
             .map(([id]) => this.status?.rooms[id]?.next_change)
             .filter((x) => !!x)
-            .sort()[0];
+            .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
         return b `<div class="toolbar">
         <div>
           <h2>Weekly schedules</h2>
@@ -1273,6 +1289,7 @@ class HeatingSchedules extends i {
                                 >Start time</label
                               ><input
                                 id=${`start-${day}-${j}`}
+                                aria-invalid=${this.timeInputs.has(`${day}-${j}`)}
                                 type="text"
                                 inputmode="text"
                                 .value=${this.timeInputs.get(`${day}-${j}`) ??
@@ -1442,6 +1459,7 @@ class HeatingSchedules extends i {
           <label for="block-start">Start time</label
           ><input
             id="block-start"
+            aria-invalid=${this.timeInputs.has(`${day}-${index}`)}
             type="text"
             inputmode="text"
             .value=${this.timeInputs.get(`${day}-${index}`) ??
@@ -1502,6 +1520,10 @@ class HeatingSchedules extends i {
             if (!this.writable || this.saving)
                 return;
             const data = new FormData(e.target);
+            for (const day of data.getAll("days").map(String))
+                this.clearDayInputs(day);
+            this.block = null;
+            this.error = "";
             this.draft = copyDay(this.draft, this.copyFrom, data.getAll("days").map(String));
             this.renderRoot
                 .querySelector("#copy-day")

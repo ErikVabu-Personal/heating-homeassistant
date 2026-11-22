@@ -659,3 +659,93 @@ async def test_other_entry_ownership_never_migrates_or_saves_store(hass, client,
         await hass.async_block_till_done()
     assert await hass.async_add_executor_job(path.read_text) == envelope
     assert (await hass.async_add_executor_job(path.stat)).st_mtime_ns == before.st_mtime_ns
+
+
+async def test_read_only_store_rejects_newer_minor_version_l05(hass, client, entry, tmp_path):
+    import json
+    from pathlib import Path
+
+    other = MockConfigEntry(
+        domain=DOMAIN, title="Boiler B", data={"adapter": ADAPTER, "prefix": "boiler_b/properties"}
+    )
+    other.add_to_hass(hass)
+    hass.config.config_dir = str(tmp_path)
+    path = Path(hass.config.path(".storage", f"{DOMAIN}.{other.entry_id}"))
+    await hass.async_add_executor_job(lambda: path.parent.mkdir(parents=True, exist_ok=True))
+    envelope = json.dumps(
+        {"version": 1, "minor_version": 4, "data": to_json(entry.runtime_data.store.data)}
+    )
+    await hass.async_add_executor_job(path.write_text, envelope)
+    with pytest.raises(ValueError, match="Unsupported heating Store version"):
+        await HeatingStore.async_read_only(hass, other.entry_id)
+    assert (await command(client, entry, "get"))["success"]
+    before = entry.runtime_data.store.data
+    result = await command(
+        client,
+        entry,
+        "room/save",
+        room={"name": "Room B", "trvs": ["climate.trv_b"], "profile_id": before.profiles[0].id},
+    )
+    assert not result["success"]
+    assert "storage is unreadable" in result["error"]["message"]
+    assert entry.runtime_data.store.data is before
+    assert await hass.async_add_executor_job(path.read_text) == envelope
+
+
+@pytest.mark.parametrize("kind", ["next_block", "duration"])
+@pytest.mark.parametrize("mode", ["auto", "manual"])
+async def test_profile_edit_recomputes_only_next_change_override_after_reload(
+    hass, client, entry, freezer, kind, mode
+):
+    from datetime import timedelta
+
+    freezer.move_to("2026-01-05T10:00:00+00:00")
+    await hass.config.async_set_time_zone("UTC")
+    assert (await command(client, entry, "mode/set", mode=mode))["success"]
+    room = entry.runtime_data.store.data.rooms[0]
+    result = await command(
+        client,
+        entry,
+        "override/set",
+        room_id=room.id,
+        temperature=23,
+        kind=kind,
+        **({"minutes": 120} if kind == "duration" else {}),
+    )
+    assert result["success"]
+    before = entry.runtime_data.store.data.overrides[0]
+    assert before.kind == kind
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.store.data.overrides[0].kind == kind
+    calls = []
+
+    async def apply(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", apply)
+    payload = {
+        "id": room.profile_id,
+        "name": "Edited profile",
+        "days": {
+            day: [
+                {"start": "00:00", "target": 18},
+                {"start": "11:00", "target": 21},
+                {"start": "22:00", "target": 18},
+            ]
+            for day in WEEKDAYS
+        },
+    }
+    result = await command(client, entry, "profile/save", profile=payload)
+    assert result["success"]
+    after = entry.runtime_data.store.data.overrides[0]
+    assert after.target == 23 and after.kind == kind
+    assert after.until == (
+        dt_util.utcnow() + timedelta(hours=1) if kind == "next_block" else before.until
+    )
+    if mode == "manual":
+        assert not calls
+    # A later apply must not move the already recomputed expiry again.
+    freezer.tick(timedelta(minutes=5))
+    await entry.runtime_data.async_data_changed()
+    assert entry.runtime_data.store.data.overrides[0].until == after.until

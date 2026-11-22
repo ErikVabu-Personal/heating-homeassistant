@@ -72,7 +72,7 @@ export function scheduleTime(value: string, locale?: Locale): string {
   });
 }
 export function parseScheduleTime(value: string, locale?: Locale): string {
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/^(\d):/, "0$1:");
   // Also accept the explicit 24-hour storage notation when typed or pasted.
   if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) return trimmed;
   const normalize = (text: string) =>

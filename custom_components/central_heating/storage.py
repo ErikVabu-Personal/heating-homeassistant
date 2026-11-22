@@ -42,6 +42,7 @@ class Override:
     target: float
     until: datetime
     source: str
+    kind: str = "duration"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,8 @@ def validate_data(data: HeatingData) -> None:
     for override in data.overrides:
         if override.room_id not in rooms or not isinstance(override.source, str):
             raise ValueError("Invalid override room or source")
+        if override.kind not in ("next_block", "duration"):
+            raise ValueError("Invalid override kind")
         bounded(override.target, 5, 30, 0.5)
         aware(override.until)
 
@@ -144,6 +147,7 @@ def to_json(data: HeatingData) -> dict[str, Any]:
                 "target": item.target,
                 "until": item.until.isoformat(),
                 "source": item.source,
+                "kind": item.kind,
             }
             for item in data.overrides
         },
@@ -189,7 +193,11 @@ def from_json(raw: dict[str, Any]) -> HeatingData:
             ),
             overrides=tuple(
                 Override(
-                    key, value["target"], datetime.fromisoformat(value["until"]), value["source"]
+                    key,
+                    value["target"],
+                    datetime.fromisoformat(value["until"]),
+                    value["source"],
+                    value.get("kind", "duration"),
                 )
                 for key, value in raw.get("overrides", {}).items()
             ),
@@ -213,7 +221,7 @@ class HeatingStore:
                     raise ValueError("Unsupported heating Store version")
                 return to_json(from_json(raw))
 
-        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=2)
+        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=3)
         self._lock = asyncio.Lock()
         self.data = HeatingData()
 
@@ -227,7 +235,7 @@ class HeatingStore:
                 envelope = json.loads(path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 return HeatingData()
-            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > 2:
+            if envelope.get("version") != 1 or envelope.get("minor_version", 1) > 3:
                 raise ValueError("Unsupported heating Store version")
             return from_json(envelope["data"])
 

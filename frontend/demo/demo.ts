@@ -84,6 +84,7 @@ function respond(message: Message): unknown {
               Date.now() + Number(message.minutes ?? 120) * 60000,
             ).toISOString(),
       source: "card",
+      kind: message.kind === "next_block" ? "next_block" : "duration",
     };
   } else if (command === "override/clear")
     delete status.configuration.overrides[String(message.room_id)];

@@ -435,7 +435,7 @@ async def test_store_minor_migration_and_entry_removal(hass, hass_storage):
     store = HeatingStore(hass, entry.entry_id)
     await store.async_load()
     assert store.data.shadow and store.data.settings.frost_temperature == 8
-    assert hass_storage[f"{DOMAIN}.{entry.entry_id}"]["minor_version"] == 2
+    assert hass_storage[f"{DOMAIN}.{entry.entry_id}"]["minor_version"] == 3
     DiylessAdapter(hass, entry.entry_id, DEFAULT_PREFIX)._unavailable()
     await async_remove_entry(hass, entry)
     assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage

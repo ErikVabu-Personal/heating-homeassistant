@@ -244,7 +244,10 @@ export class HeatingSchedules extends LitElement {
     }
   }
   get dirty() {
-    return !!this.draft && JSON.stringify(this.draft) !== this.baseline;
+    return (
+      !!this.draft &&
+      (this.timeInputs.size > 0 || JSON.stringify(this.draft) !== this.baseline)
+    );
   }
   private load(id: string) {
     const source = this.status?.configuration.profiles[id];
@@ -258,6 +261,7 @@ export class HeatingSchedules extends LitElement {
     this.deleting = false;
   }
   private newProfile(copy = false) {
+    this.timeInputs.clear();
     this.selected = "";
     this.draft =
       copy && this.draft
@@ -269,8 +273,16 @@ export class HeatingSchedules extends LitElement {
     this.block = null;
     this.deleting = false;
   }
+  private clearDayInputs(day: string) {
+    for (const key of this.timeInputs.keys())
+      if (key.startsWith(`${day}-`)) this.timeInputs.delete(key);
+  }
   private change(day: string, blocks: Block[]) {
     if (!this.draft || !this.writable || this.saving) return;
+    if (blocks.length !== this.draft.days[day].length) {
+      this.clearDayInputs(day);
+      if (this.block?.day === day) this.block = null;
+    }
     this.draft = { ...this.draft, days: { ...this.draft.days, [day]: blocks } };
     this.error = "";
   }
@@ -280,14 +292,22 @@ export class HeatingSchedules extends LitElement {
     try {
       const at = minutes(parseScheduleTime(input.value, this.hass?.locale));
       if (at % 5) throw new Error("Times must be on the five-minute grid.");
-      const blocks = moveBoundary(this.draft!.days[day], index, at);
+      const dayBlocks = this.draft!.days[day];
+      const previous = dayBlocks[index - 1]?.start ?? "00:00";
+      const next = dayBlocks[index + 1]?.start ?? "24:00";
+      const before = next === "24:00" ? 1440 : minutes(next);
+      if (index === 0 || at <= minutes(previous) || at >= before)
+        throw new Error(
+          `Start time must be after ${previous} and before ${next}.`,
+        );
+      const blocks = dayBlocks.map((block, i) =>
+        i === index ? { ...block, start: clock(at) } : block,
+      );
       this.timeInputs.delete(key);
-      input.setCustomValidity("");
       this.change(day, blocks);
     } catch (error) {
       this.timeInputs.set(key, input.value);
       this.error = error instanceof Error ? error.message : String(error);
-      input.setCustomValidity(this.error);
     }
   }
   private attempt(action: () => void) {
@@ -368,7 +388,7 @@ export class HeatingSchedules extends LitElement {
     const next = rooms
       .map(([id]) => this.status?.rooms[id]?.next_change)
       .filter((x): x is string => !!x)
-      .sort()[0];
+      .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
     return html`<div class="toolbar">
         <div>
           <h2>Weekly schedules</h2>
@@ -583,6 +603,9 @@ export class HeatingSchedules extends LitElement {
                                 >Start time</label
                               ><input
                                 id=${`start-${day}-${j}`}
+                                aria-invalid=${this.timeInputs.has(
+                                  `${day}-${j}`,
+                                )}
                                 type="text"
                                 inputmode="text"
                                 .value=${this.timeInputs.get(`${day}-${j}`) ??
@@ -764,6 +787,7 @@ export class HeatingSchedules extends LitElement {
           <label for="block-start">Start time</label
           ><input
             id="block-start"
+            aria-invalid=${this.timeInputs.has(`${day}-${index}`)}
             type="text"
             inputmode="text"
             .value=${this.timeInputs.get(`${day}-${index}`) ??
@@ -830,6 +854,10 @@ export class HeatingSchedules extends LitElement {
           e.preventDefault();
           if (!this.writable || this.saving) return;
           const data = new FormData(e.target as HTMLFormElement);
+          for (const day of data.getAll("days").map(String))
+            this.clearDayInputs(day);
+          this.block = null;
+          this.error = "";
           this.draft = copyDay(
             this.draft!,
             this.copyFrom!,

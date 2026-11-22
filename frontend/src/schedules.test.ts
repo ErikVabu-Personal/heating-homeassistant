@@ -237,3 +237,157 @@ it("uses HA's time format for editable starts and blocks saving an invalid raw t
   await tick(e);
   expect(e.draft!.days.mon[1].start).toBe("08:15");
 });
+
+it.each(["list", "block"])(
+  "rejects out-of-order typed times in the %s editor without clamping (E01)",
+  async (editor) => {
+    const e = await mount();
+    if (editor === "block") {
+      e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+        ".schedule-block",
+      )[3].click();
+      await tick(e);
+    }
+    const id = editor === "list" ? "#start-mon-3" : "#block-start";
+    input(e, id, "23:00");
+    await tick(e);
+    expect(e.draft!.days.mon[3].start).toBe("17:00");
+    expect(e.error).toContain("must be after 09:00 and before 22:00");
+    button(e, "Save profile").click();
+    await tick(e);
+    expect(e.saveProfile).not.toHaveBeenCalled();
+    input(e, id, "05:00");
+    await tick(e);
+    expect(e.draft!.days.mon[3].start).toBe("17:00");
+    expect(e.error).toContain("must be after 09:00 and before 22:00");
+    input(e, id, "18:05");
+    await tick(e);
+    expect(e.draft!.days.mon[3].start).toBe("18:05");
+    button(e, "Save profile").click();
+    await tick(e);
+    expect(e.saveProfile).toHaveBeenCalled();
+  },
+);
+it("removing a rejected row clears its remembered input and allows saving other changes", async () => {
+  const e = await mount();
+  input(e, "#profile-name", "Keep this edit", "input");
+  input(e, "#start-mon-3", "nonsense");
+  await tick(e);
+  e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+    "details:first-of-type .block-row button",
+  )[3].click();
+  await tick(e);
+  expect(e.draft!.days.mon).toHaveLength(4);
+  button(e, "Save profile").click();
+  await tick(e);
+  expect(e.saveProfile).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "Keep this edit" }),
+  );
+  expect(e.error).toBe("");
+});
+it("removing a row above rejected text restores the correct row times and keeps other days' errors", async () => {
+  const e = await mount();
+  input(e, "#start-mon-3", "nonsense");
+  input(e, "#start-tue-2", "invalid Tuesday");
+  await tick(e);
+  e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+    "details:first-of-type .block-row button",
+  )[1].click();
+  await tick(e);
+  expect(
+    e.shadowRoot!.querySelector<HTMLInputElement>("#start-mon-2")!.value,
+  ).not.toBe("nonsense");
+  expect(e.draft!.days.mon[2].start).toBe("17:00");
+  expect(
+    e.shadowRoot!.querySelector<HTMLInputElement>("#start-tue-2")!.value,
+  ).toBe("invalid Tuesday");
+  button(e, "Save profile").click();
+  await tick(e);
+  expect(e.saveProfile).not.toHaveBeenCalled();
+  input(e, "#start-tue-2", "10:00");
+  await tick(e);
+  button(e, "Save profile").click();
+  await tick(e);
+  expect(e.saveProfile).toHaveBeenCalled();
+});
+it.each(["split", "copy"])(
+  "%s clears rejected inputs for the structurally changed day",
+  async (action) => {
+    const e = await mount();
+    input(e, "#start-mon-3", "nonsense");
+    await tick(e);
+    if (action === "split") button(e, "Add block").click();
+    else {
+      // Copy Tuesday to Monday, replacing the rejected row with valid schedule data.
+      e.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+        ".schedule-block",
+      )[5].click();
+      await tick(e);
+      button(e, "Copy day to").click();
+      await tick(e);
+      const check = e.shadowRoot!.querySelector<HTMLInputElement>(
+        "input[name=days][value=mon]",
+      )!;
+      check.checked = true;
+      check.form!.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+      input(e, "#profile-name", "Copied Monday", "input");
+    }
+    await tick(e);
+    button(e, "Save profile").click();
+    await tick(e);
+    expect(e.saveProfile).toHaveBeenCalled();
+  },
+);
+it("disables profile selection for unsaved edits, including rejected typed input (E05)", async () => {
+  const e = await mount();
+  const selector = () =>
+    e.shadowRoot!.querySelector<HTMLSelectElement>(
+      '[aria-label="Heating profile"]',
+    )!;
+  expect(selector().disabled).toBe(false);
+  input(e, "#profile-name", "Renamed", "input");
+  await tick(e);
+  expect(selector().disabled).toBe(true);
+  button(e, "Discard changes").click();
+  await tick(e);
+  expect(selector().disabled).toBe(false);
+  input(e, "#start-mon-2", "nonsense");
+  await tick(e);
+  expect(selector().disabled).toBe(true);
+});
+it("chooses next room change by absolute time through the autumn DST fold", async () => {
+  const e = await mount();
+  e.hass = {
+    config: { time_zone: "UTC" },
+    locale: { language: "en-GB", time_format: "24" },
+  } as import("./types").Hass;
+  e.status!.rooms.room_a.next_change = "2026-10-25T02:10:00+01:00";
+  e.status!.rooms.room_b.next_change = "2026-10-25T02:50:00+02:00";
+  e.requestUpdate();
+  await tick(e);
+  expect(e.shadowRoot!.querySelector(".profile-meta")!.textContent).toContain(
+    "00:50",
+  );
+});
+it.each([
+  ["24", "6:30"],
+  ["12", "6:30 AM"],
+] as const)(
+  "accepts a one-digit hour in a %s h locale",
+  async (format, value) => {
+    const e = await mount();
+    e.hass = {
+      locale: {
+        language: format === "24" ? "en-GB" : "en-US",
+        time_format: format,
+      },
+    } as import("./types").Hass;
+    await tick(e);
+    input(e, "#start-mon-1", value);
+    await tick(e);
+    expect(e.draft!.days.mon[1].start).toBe("06:30");
+    expect(e.error).toBe("");
+  },
+);

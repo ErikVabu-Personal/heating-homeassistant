@@ -160,7 +160,7 @@ trailing slash. It's configurable.
 
 ## 6. Rooms, profiles, modes and overrides
 
-### 6.1 Data model (Store, version 1, minor version 2)
+### 6.1 Data model (Store, version 1, minor version 3)
 ```jsonc
 {
   "shadow": true,                              // stored, on for new entries
@@ -187,7 +187,7 @@ trailing slash. It's configurable.
     "<room_id>": {"name": "Kitchen", "trvs": ["climate.x", "climate.y"], "profile_id": "<profile_id>",
                   "area_id": null, "enabled": true}
   },
-  "overrides": {"<room_id>": {"target": 22.0, "until": "2026-01-01T18:00:00+01:00", "source": "card"}}
+  "overrides": {"<room_id>": {"target": 22.0, "until": "2026-01-01T18:00:00+01:00", "source": "card", "kind": "next_block"}}
 }
 ```
 
@@ -286,6 +286,11 @@ uses its first occurrence.
     save when there is nothing to clear); otherwise create or
     update it with `settings.override_default`. With `sync_rooms_on_knob_change` on, apply it to the other TRVs.
   - Confirmed commands and commands outside the retry window never mask later knob changes.
+- **Profile edits:** an active `next_block` override recomputes its expiry against the edited profile
+  at the time of the edit; a `duration` override keeps its expiry. Reassigning a room to another profile
+  still clears its override. The selected kind is persisted (Store minor version 3) so this also works after
+  reload, independently of later changes to override defaults. Legacy overrides without a recorded kind
+  retain their existing expiry and load as `duration`: their original kind cannot be recovered reliably.
 - **Expiry:** an override expires at its `until`, or when it's cleared, or when the room's profile changes. The
   room then goes back to the desired target.
 - **Summer/manual:** knob changes are not tracked or immediately reverted.
