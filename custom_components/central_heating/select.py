@@ -40,4 +40,4 @@ class ActiveScheduleSelect(HeatingEntity, SelectEntity):
         )
         if schedule_id is None:
             raise ValueError("Unknown schedule option")
-        await self.engine.async_set_schedule(schedule_id)
+        await self.engine.async_set_schedule(schedule_id, by_id=True)

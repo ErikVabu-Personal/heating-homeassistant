@@ -283,25 +283,67 @@ async def test_away_until_returns_to_schedule(hass, client, entry, freezer):
     assert entry.runtime_data.store.data.mode.value == "schedule"
 
 
-async def test_select_maps_exact_names_to_ids_and_conflicting_name_is_rejected(hass, client, entry):
+async def test_name_first_service_and_id_based_select_with_colliding_name(hass, client, entry):
     assert (
         await command(client, entry, "schedule/save", schedule={"id": "winter", "name": "Cold"})
     )["success"]
-    before = entry.runtime_data.store.data
-    conflict = await command(client, entry, "schedule/save", schedule={"name": "winter"})
-    assert not conflict["success"]
-    assert "another schedule's id" in conflict["error"]["message"]
-    assert entry.runtime_data.store.data is before
-    key = (await command(client, entry, "schedule/save", schedule={"name": "Autumn"}))["result"][
+    key = (await command(client, entry, "schedule/save", schedule={"name": "winter"}))["result"][
         "saved_id"
     ]
     select = ActiveScheduleSelect(entry, "active_schedule")
     with patch.object(entry.runtime_data, "async_set_schedule", new_callable=AsyncMock) as activate:
-        await select.async_select_option("Autumn")
-        activate.assert_awaited_once_with(key)
-    await select.async_select_option("Autumn")
+        await select.async_select_option("winter")
+        activate.assert_awaited_once_with(key, by_id=True)
+    await select.async_select_option("winter")
     assert entry.runtime_data.store.data.active_schedule_id == key
-    assert select.current_option == "Autumn"
+    await select.async_select_option("Cold")
+    assert entry.runtime_data.store.data.active_schedule_id == "winter"
+    await hass.services.async_call(
+        DOMAIN,
+        "set_schedule",
+        {"config_entry_id": entry.entry_id, "schedule": "winter"},
+        blocking=True,
+    )
+    assert entry.runtime_data.store.data.active_schedule_id == key
+    assert (await command(client, entry, "schedule/activate", schedule_id="winter"))["success"]
+    assert entry.runtime_data.store.data.active_schedule_id == "winter"
+
+
+@pytest.mark.parametrize("names", [("Autumn", "Autumn"), ("Autumn", "aUtUmN")])
+async def test_duplicate_schedule_names_rejected_atomically(client, entry, names):
+    assert (await command(client, entry, "schedule/save", schedule={"name": names[0]}))["success"]
+    before = entry.runtime_data.store.data
+    result = await command(client, entry, "schedule/save", schedule={"name": names[1]})
+    assert not result["success"]
+    assert entry.runtime_data.store.data is before
+
+
+async def test_async_apply_room_filter_excludes_rooms_needing_writes(hass, client, entry):
+    from homeassistant.core import CoreState
+
+    calls = await physical(hass)
+    a = entry.runtime_data.store.data.rooms[0].id
+    hass.states.async_set("climate.trv_b", "heat", {"temperature": 25, "current_temperature": 17})
+    result = await command(
+        client, entry, "room/save", room={"name": "Room B", "trvs": ["climate.trv_b"]}
+    )
+    assert result["success"]
+    await command(client, entry, "mode/set", mode="schedule")
+    await hass.async_block_till_done()
+    # Pause listeners while making both TRVs differ from the desired target.
+    engine = entry.runtime_data
+    await engine.async_stop(unloading=False)
+    hass.states.async_set("climate.trv_a", "heat", {"temperature": 25, "current_temperature": 17})
+    hass.states.async_set("climate.trv_b", "heat", {"temperature": 25, "current_temperature": 17})
+    await hass.async_block_till_done()
+    calls.clear()
+    assert hass.state is CoreState.running
+    engine._stopped = False
+    try:
+        await engine.rooms.async_apply(force=True, room_ids={a})
+        assert calls and {call["entity_id"] for call in calls} == {"climate.trv_a"}
+    finally:
+        await engine.async_stop(unloading=False)
 
 
 async def test_room_update_cannot_copy_weeks_and_is_atomic(client, entry):

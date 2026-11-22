@@ -791,6 +791,7 @@
             this.copyRooms = false;
             this.baseline = "";
             this.serverSnapshot = "";
+            this.newSource = "";
             this.entryId = "";
             this.timeInputs = new Map();
         }
@@ -1044,8 +1045,22 @@
             }
             if (!this.draft && this.status)
                 this.load(this.status.configuration.active_schedule_id);
-            if (this.draft && this.selected && !this.saving) {
-                const source = this.status?.configuration.schedules[this.selected];
+            if (this.draft && this.status && !this.saving) {
+                const config = this.status.configuration;
+                if (this.selected && !config.schedules[this.selected]) {
+                    if (!this.dirty)
+                        this.load(config.active_schedule_id);
+                    return;
+                }
+                const source = this.selected
+                    ? config.schedules[this.selected]
+                    : {
+                        name: JSON.parse(this.baseline).name,
+                        rooms: Object.fromEntries(Object.keys(config.rooms).map((id) => [
+                            id,
+                            config.schedules[this.newSource]?.rooms[id] ?? defaultWeek(),
+                        ])),
+                    };
                 if (source && JSON.stringify(source) !== this.serverSnapshot) {
                     if (!this.dirty)
                         this.load(this.selected);
@@ -1086,7 +1101,9 @@
         }
         get dirty() {
             return (!!this.draft &&
-                (this.timeInputs.size > 0 || JSON.stringify(this.draft) !== this.baseline));
+                (!this.selected ||
+                    this.timeInputs.size > 0 ||
+                    JSON.stringify(this.draft) !== this.baseline));
         }
         load(id) {
             const source = this.status?.configuration.schedules[id];
@@ -1261,6 +1278,7 @@
                 : active
                     ? "The active schedule cannot be deleted. Activate another schedule first."
                     : "";
+            const missing = !!this.selected && !schedules[this.selected];
             const next = this.status?.rooms[this.selectedRoom]?.next_change;
             return b `<div class="toolbar">
         <div>
@@ -1281,6 +1299,11 @@
           ?disabled=${this.dirty || this.saving}
           @change=${(e) => this.load(e.target.value)}
         >
+          ${missing
+            ? b `<option value=${this.selected} selected>
+                Deleted · ${p?.name}
+              </option>`
+            : A}
           ${!this.selected
             ? b `<option value="">New schedule</option>`
             : A}
@@ -1324,6 +1347,12 @@
       </div>
       ${deleteReason
             ? b `<p id="delete-reason" class="muted">${deleteReason}</p>`
+            : A}
+      ${missing
+            ? b `<p role="status">
+            This schedule was deleted on another device. Discard changes to open
+            the active schedule.
+          </p>`
             : A}
       ${p
             ? b `<fieldset>
@@ -1550,14 +1579,15 @@
             <div class="actions">
               <button
                 ?disabled=${this.saving || !this.dirty}
-                @click=${() => this.load(this.selected ||
-                this.status.configuration.active_schedule_id)}
+                @click=${() => this.load((this.status.configuration.schedules[this.selected]
+                ? this.selected
+                : "") || this.status.configuration.active_schedule_id)}
               >
                 Discard changes</button
               ><button
                 id="save-schedule"
                 class="primary"
-                ?disabled=${disabled || !this.dirty}
+                ?disabled=${disabled || !this.dirty || missing}
                 @click=${() => this.save()}
               >
                 ${this.saving ? "Saving…" : "Save schedule"}
@@ -1784,7 +1814,9 @@
                         defaultWeek(),
                     ])),
             };
-            this.baseline = "";
+            this.newSource = source;
+            this.baseline = JSON.stringify(this.draft);
+            this.serverSnapshot = "";
             this.error = "";
             this.renderRoot
                 .querySelector("#create-schedule")
