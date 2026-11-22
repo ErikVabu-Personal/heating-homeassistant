@@ -14,7 +14,7 @@ it("maps internal values to the approved labels and exact explanations with live
     manual: "Manual",
   });
   expect(modeExplanation("schedule", settings)).toBe(
-    "Rooms follow the Winter schedule.",
+    "Rooms follow the active schedule.",
   );
   expect(modeExplanation("away", settings)).toBe("All rooms at 16.5°.");
   expect(modeExplanation("away", settings, "18:45")).toBe(
@@ -26,4 +26,15 @@ it("maps internal values to the approved labels and exact explanations with live
   expect(modeExplanation("manual", settings)).toBe(
     "Central Heating doesn't touch the radiators; the boiler still follows their demand.",
   );
+});
+
+it("uses the supplied schedule name without inventing one", () => {
+  expect(
+    modeExplanation(
+      "schedule",
+      fixture().configuration.settings,
+      undefined,
+      "Autumn",
+    ),
+  ).toBe("Rooms follow the Autumn schedule.");
 });

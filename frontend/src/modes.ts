@@ -10,11 +10,13 @@ export function modeExplanation(
   mode: Mode,
   settings: Settings,
   until?: string,
-  scheduleName = "Winter",
+  scheduleName?: string,
 ): string {
   switch (mode) {
     case "schedule":
-      return `Rooms follow the ${scheduleName} schedule.`;
+      return scheduleName
+        ? `Rooms follow the ${scheduleName} schedule.`
+        : "Rooms follow the active schedule.";
     case "away":
       return `All rooms at ${temperature(settings.away_temperature)}${until ? ` (until ${until})` : ""}.`;
     case "off":

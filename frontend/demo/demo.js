@@ -790,6 +790,7 @@
             this.creating = false;
             this.copyRooms = false;
             this.baseline = "";
+            this.serverSnapshot = "";
             this.entryId = "";
             this.timeInputs = new Map();
         }
@@ -1043,6 +1044,42 @@
             }
             if (!this.draft && this.status)
                 this.load(this.status.configuration.active_schedule_id);
+            if (this.draft && this.selected && !this.saving) {
+                const source = this.status?.configuration.schedules[this.selected];
+                if (source && JSON.stringify(source) !== this.serverSnapshot) {
+                    if (!this.dirty)
+                        this.load(this.selected);
+                    else {
+                        const baseline = JSON.parse(this.baseline);
+                        const rooms = { ...this.draft.rooms };
+                        for (const id of Object.keys(rooms)) {
+                            if (!(id in source.rooms)) {
+                                delete rooms[id];
+                                delete baseline.rooms[id];
+                            }
+                        }
+                        for (const [id, week] of Object.entries(source.rooms)) {
+                            // Refresh untouched weeks as well as newly added rooms.
+                            if (JSON.stringify(rooms[id]) === JSON.stringify(baseline.rooms[id])) {
+                                rooms[id] = structuredClone(week);
+                                baseline.rooms[id] = structuredClone(week);
+                            }
+                        }
+                        const name = this.draft.name === baseline.name ? source.name : this.draft.name;
+                        if (this.draft.name === baseline.name)
+                            baseline.name = source.name;
+                        this.draft = { ...this.draft, name, rooms };
+                        this.baseline = JSON.stringify(baseline);
+                        this.serverSnapshot = JSON.stringify(source);
+                        if (!(this.selectedRoom in rooms)) {
+                            this.selectedRoom = Object.keys(rooms)[0] ?? "";
+                            this.timeInputs.clear();
+                            this.block = null;
+                            this.error = "";
+                        }
+                    }
+                }
+            }
         }
         get week() {
             return this.draft?.rooms[this.selectedRoom] ?? defaultWeek();
@@ -1059,6 +1096,7 @@
             this.selected = id;
             this.draft = structuredClone(source);
             this.baseline = JSON.stringify(this.draft);
+            this.serverSnapshot = JSON.stringify(source);
             if (!this.status?.configuration.rooms[this.selectedRoom])
                 this.selectedRoom =
                     Object.keys(this.status?.configuration.rooms ?? {})[0] ?? "";
@@ -1076,11 +1114,16 @@
                 if (this.timeInputs.size)
                     throw new Error("Correct invalid start times before saving.");
                 const payload = schedulePayload(this.draft, this.selected || undefined);
+                const saved = structuredClone(this.draft);
+                if (this.selected) {
+                    const baseline = JSON.parse(this.baseline);
+                    payload.rooms = Object.fromEntries(Object.entries(payload.rooms).filter(([id, week]) => JSON.stringify(week) !== JSON.stringify(baseline.rooms[id])));
+                }
                 const id = await this.saveSchedule(payload);
                 if (entry !== this.entryId)
                     return;
                 this.selected = id || this.selected;
-                this.draft = { name: payload.name, rooms: payload.rooms };
+                this.draft = { ...saved, name: payload.name };
                 this.baseline = JSON.stringify(this.draft);
             }
             catch (e) {
@@ -1213,6 +1256,11 @@
             const disabled = !this.writable || this.saving;
             const active = this.selected === this.status?.configuration.active_schedule_id;
             const protectedDelete = active || Object.keys(schedules).length <= 1;
+            const deleteReason = Object.keys(schedules).length <= 1
+                ? "The last schedule cannot be deleted."
+                : active
+                    ? "The active schedule cannot be deleted. Activate another schedule first."
+                    : "";
             const next = this.status?.rooms[this.selectedRoom]?.next_change;
             return b `<div class="toolbar">
         <div>
@@ -1262,7 +1310,11 @@
         </button>
         <button
           class="danger"
-          ?disabled=${disabled || this.dirty || !this.selected}
+          ?disabled=${disabled ||
+            this.dirty ||
+            !this.selected ||
+            protectedDelete}
+          aria-describedby=${deleteReason ? "delete-reason" : A}
           @click=${() => {
             this.deleting = true;
         }}
@@ -1270,6 +1322,9 @@
           Delete
         </button>
       </div>
+      ${deleteReason
+            ? b `<p id="delete-reason" class="muted">${deleteReason}</p>`
+            : A}
       ${p
             ? b `<fieldset>
               <div class="field">
@@ -1840,10 +1895,12 @@
         off: "Off",
         manual: "Manual",
     };
-    function modeExplanation(mode, settings, until, scheduleName = "Winter") {
+    function modeExplanation(mode, settings, until, scheduleName) {
         switch (mode) {
             case "schedule":
-                return `Rooms follow the ${scheduleName} schedule.`;
+                return scheduleName
+                    ? `Rooms follow the ${scheduleName} schedule.`
+                    : "Rooms follow the active schedule.";
             case "away":
                 return `All rooms at ${temperature(settings.away_temperature)}${until ? ` (until ${until})` : ""}.`;
             case "off":

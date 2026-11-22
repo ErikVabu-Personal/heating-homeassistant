@@ -696,3 +696,42 @@ it("shows and hides Away until with the selected mode and clears drafts after a 
     "Schedule · Autumn",
   );
 });
+
+it.each(["schedule", "away", "off", "manual"] as const)(
+  "offers the Schedule selector only in Schedule mode, selecting %s (C01)",
+  async (mode) => {
+    const card = await mount(mocked().hass);
+    const select = card.shadowRoot!.querySelector<HTMLSelectElement>("#mode")!;
+    select.value = mode;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle(card);
+    expect(!!card.shadowRoot!.querySelector("#active-schedule")).toBe(
+      mode === "schedule",
+    );
+  },
+);
+it("never offers or sends week seeding when editing an existing room (C06/C07)", async () => {
+  const fake = mocked();
+  const card = await mount(fake.hass);
+  card.tab = "Rooms";
+  await settle(card);
+  findButton(card, "Edit").click();
+  await settle(card);
+  expect(card.shadowRoot!.querySelector("#copy-week-from-room")).toBeNull();
+  const name = card.shadowRoot!.querySelector<HTMLInputElement>("#room-name")!;
+  // Even a stale/injected form control cannot add create-only seeding to edits.
+  const stale = document.createElement("input");
+  stale.name = "copy_week_from_room";
+  stale.value = "room_b";
+  name.form!.append(stale);
+  name.value = "Room A renamed";
+  submit(name.form!);
+  await settle(card);
+  const writes = writeMessages(fake, "room/save");
+  expect(writes).toHaveLength(1);
+  expect(writes[0].room).toMatchObject({
+    id: "room_a",
+    name: "Room A renamed",
+  });
+  expect(writes[0].room).not.toHaveProperty("copy_week_from_room");
+});
