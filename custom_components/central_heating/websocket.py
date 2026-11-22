@@ -1,5 +1,6 @@
 """Authenticated reads, admin-only atomic writes and throttled status subscriptions."""
 
+import asyncio
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -17,7 +18,7 @@ from .climate import RoomClimate
 from .const import DOMAIN
 from .demand import available_temperature
 from .schedule import WEEKDAYS
-from .storage import MODES, from_json, to_json
+from .storage import MODES, HeatingStore, from_json, to_json
 
 _NAME = vol.All(str, vol.Length(min=1, max=200))
 _ID = vol.All(str, vol.Length(min=1, max=100))
@@ -96,6 +97,23 @@ def room_entity_ids(hass):
     )
 
 
+async def async_used_trv_ids(hass, entry_id):
+    """Include stored ownership of disabled/unloaded entries, not only live engines."""
+    used = set()
+    for other in hass.config_entries.async_entries(DOMAIN):
+        if other.entry_id == entry_id:
+            continue
+        runtime = getattr(other, "runtime_data", None)
+        if runtime is not None:
+            data = runtime.store.data
+        else:
+            store = HeatingStore(hass, other.entry_id)
+            await store.async_load()
+            data = store.data
+        used.update(trv for room in data.rooms for trv in room.trvs)
+    return sorted(used)
+
+
 @callback
 def status(entry):
     """Build a detached, JSON-safe snapshot without changing any heating state."""
@@ -135,6 +153,7 @@ def status(entry):
     return {
         "config_entry_id": entry.entry_id,
         "room_entity_ids": room_entity_ids(engine.hass),
+        "used_trv_ids": getattr(engine, "other_entry_trvs", []),
         "configuration": config,
         "global": {
             "demand_count": engine.demand.demand_count,
@@ -204,13 +223,28 @@ async def _write(entry, command, msg):
                 raw["shadow"] = msg["shadow"]
         return from_json(raw)
 
-    async with engine._lock:
-        async with engine._room_lock:
-            shadow_before = engine.store.data.shadow
-            await engine.store.async_update(update)
-            if shadow_before != engine.store.data.shadow:
-                engine._last_command = None
-                engine._last_send_tick = engine._last_source_tick = None
+    async with engine.hass.data[f"{DOMAIN}_trv_lock"]:
+        async with engine._lock:
+            async with engine._room_lock:
+                if command == "room/save":
+                    trvs = set(msg["room"]["trvs"])
+                    if trvs.intersection(room_entity_ids(engine.hass)):
+                        raise ValueError("Virtual room climates cannot be used as thermostats")
+                    if trvs.intersection(await async_used_trv_ids(engine.hass, entry.entry_id)):
+                        raise ValueError("A thermostat already belongs to another heating instance")
+                shadow_before = engine.store.data.shadow
+                await engine.store.async_update(update)
+                if shadow_before != engine.store.data.shadow:
+                    engine._last_command = None
+                    engine._last_send_tick = engine._last_source_tick = None
+    if command == "room/delete":
+        registry = er.async_get(engine.hass)
+        entity_id = registry.async_get_entity_id(
+            "climate", DOMAIN, f"{entry.entry_id}_room_{msg['room_id']}"
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
+    engine.other_entry_trvs = await async_used_trv_ids(engine.hass, entry.entry_id)
     await engine.async_data_changed()
     return saved_id
 
@@ -221,15 +255,20 @@ def _subscribe(hass, connection, msg, entry):
     timer = None
     last_sent = dt_util.utcnow().timestamp()
     closed = False
+    last_snapshot = status(entry)
 
     @callback
     def send(now):
-        nonlocal timer, last_sent
+        nonlocal timer, last_sent, last_snapshot
         timer = None
         if closed:
             return
+        snapshot = status(entry)
+        if snapshot == last_snapshot:
+            return
         last_sent = dt_util.utcnow().timestamp()
-        connection.send_event(msg["id"], status(entry))
+        last_snapshot = snapshot
+        connection.send_event(msg["id"], snapshot)
 
     @callback
     def changed():
@@ -247,6 +286,7 @@ def _subscribe(hass, connection, msg, entry):
         if closed:
             return
         closed = True
+        engine._subscription_cleanups.discard(entry_unloaded)
         unsubscribe_engine()
         if timer is not None:
             timer()
@@ -256,12 +296,16 @@ def _subscribe(hass, connection, msg, entry):
 
     @callback
     def entry_unloaded():
-        unsubscribe()
-        connection.subscriptions.pop(msg["id"], None)
+        try:
+            if not closed:
+                connection.send_event(msg["id"], {"unloaded": True})
+        finally:
+            unsubscribe()
+            connection.subscriptions.pop(msg["id"], None)
 
-    entry.async_on_unload(entry_unloaded)
+    engine._subscription_cleanups.add(entry_unloaded)
     connection.send_result(msg["id"])
-    connection.send_event(msg["id"], status(entry))
+    connection.send_event(msg["id"], last_snapshot)
 
 
 @callback
@@ -271,6 +315,7 @@ def async_register_websocket(hass):
     if hass.data.get(marker):
         return
     hass.data[marker] = True
+    hass.data[f"{DOMAIN}_trv_lock"] = asyncio.Lock()
 
     def register(command, fields):
         @websocket_api.async_response
@@ -298,6 +343,11 @@ def async_register_websocket(hass):
                 entry = _entry(hass, msg["config_entry_id"])
             except ValueError as exc:
                 connection.send_error(msg["id"], "not_found", str(exc))
+                return
+            try:
+                entry.runtime_data.other_entry_trvs = await async_used_trv_ids(hass, entry.entry_id)
+            except ValueError as exc:
+                connection.send_error(msg["id"], "invalid_data", str(exc))
                 return
             if command == "subscribe":
                 _subscribe(hass, connection, msg, entry)

@@ -333,6 +333,16 @@ Override `minutes` accepts 1–10080. Every field has a translated name and desc
 
 Every command validates with voluptuous, returns structured errors, and never partly applies a change.
 
+Subscriptions retain cleanup callbacks in a set on the entry engine. One entry-unload hook drains this set;
+normal unsubscribe/disconnect removes its own callback. Unload/reload sends a final `{"unloaded": true}` event
+before ending the subscription. The card reconnects with bounded backoff. Normal events are emitted only for
+a changed snapshot and at most once per second; repeated engine notifications with identical status are silent.
+
+Room deletion removes the room climate's entity-registry entry and any room override. Room saves reject virtual
+Central Heating climates (including renamed entities) and TRVs assigned to any other configured instance,
+including an unloaded instance's stored rooms. A shared ownership lock serializes cross-entry assignment.
+The full status includes `used_trv_ids` for other instances, for the card's physical-TRV picker.
+
 **Wire contract (part 1):** every instance-specific command carries `config_entry_id`. `get` without it lists
 loaded instances as `{entries: [{entry_id, title}], room_entity_ids: [...]}` for card configuration.
 `room_entity_ids` is also included in full status and lists every Central Heating climate entity from the
