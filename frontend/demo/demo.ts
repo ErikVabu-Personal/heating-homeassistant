@@ -4,7 +4,35 @@ import { defaultWeek } from "../src/format";
 import { fixture } from "./fixture";
 import type { CentralHeatingCard } from "../src/card";
 import type { Hass, Message, Room, Schedule, Status } from "../src/types";
-let status = fixture();
+const query = new URLSearchParams(location.search);
+function demoFixture() {
+  const data = fixture();
+  if (query.get("rooms") === "9") {
+    for (let i = 2; i < 9; i++) {
+      const letter = String.fromCharCode(97 + i),
+        id = `room_${letter}`;
+      data.configuration.rooms[id] = {
+        name: `Room ${letter.toUpperCase()}`,
+        trvs: [`climate.trv_${letter}`],
+        area_id: null,
+        enabled: true,
+      };
+      data.rooms[id] = {
+        ...structuredClone(data.rooms.room_a),
+        name: `Room ${letter.toUpperCase()}`,
+      };
+      for (const schedule of Object.values(data.configuration.schedules)) {
+        schedule.rooms[id] = structuredClone(
+          schedule.rooms[i % 2 ? "room_a" : "room_b"],
+        );
+        for (const blocks of Object.values(schedule.rooms[id].days))
+          for (const block of blocks) block.target += (i % 3) * 0.5;
+      }
+    }
+  }
+  return data;
+}
+let status = demoFixture();
 let nextId = 1;
 const listeners = new Set<(value: Status) => void>();
 const connectionEvents = {
@@ -261,7 +289,6 @@ const hass: Hass = {
   areas: { area_a: { name: "Area A" }, area_b: { name: "Area B" } },
   user: { is_admin: true },
 };
-const query = new URLSearchParams(location.search);
 const width = query.get("width") === "390" ? "390px" : "1080px";
 document.documentElement.dataset.theme =
   query.get("theme") === "dark" ? "dark" : "light";
@@ -294,7 +321,7 @@ document.querySelector("#width")!.addEventListener("change", (e) => {
 });
 document.querySelector<HTMLSelectElement>("#width")!.value = width;
 document.querySelector("#reset")!.addEventListener("click", () => {
-  status = fixture();
+  status = demoFixture();
   card.modeDraft = undefined;
   card.modeUntilDraft = undefined;
   card.scheduleDraft = undefined;

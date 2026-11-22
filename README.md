@@ -116,3 +116,12 @@ new schedule Store.
 
 Before upgrading again after a rollback, move each old `.pre_schedules` file aside to a safe location
 so the next migration can back up the current legacy Store. Keep that earlier backup as well.
+
+### Schedule bars and day overview
+
+On phones the selected room has seven day bars. Tap a day to open its existing time/temperature list
+below; short blocks retain their true width and reveal full values in that list. Desktop dragging stays
+available. The Schedules **Rooms / Overview** toggle compares all rooms for one day of the selected plan;
+tapping a row returns to its room editor. The overview is read-only and follows the current draft.
+Its now marker appears only on the active plan and today's day in Home Assistant's time zone, refreshing
+every minute. Preview nine invented rooms with `frontend/demo/index.html?rooms=9&tab=Schedules`.
