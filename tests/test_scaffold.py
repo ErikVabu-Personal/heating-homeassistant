@@ -69,4 +69,6 @@ def test_all_internal_select_options_have_approved_display_translations():
 
 
 def test_english_translations_equal_source_strings():
-    assert (COMPONENT / "translations/en.json").read_bytes() == (COMPONENT / "strings.json").read_bytes()
+    assert (COMPONENT / "translations/en.json").read_bytes() == (
+        COMPONENT / "strings.json"
+    ).read_bytes()
