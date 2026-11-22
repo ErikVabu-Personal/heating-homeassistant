@@ -577,6 +577,11 @@ async def test_sleepy_optimistic_stale_real_or_lost_command(hass, freezer, lost)
         assert not engine.store.data.overrides
     await sleepy.wake()
     assert sleepy.physical_target == 21
+    if lost:
+        # The optimistic value is already in HA: real devices do not force identical updates.
+        # No state-change event is emitted on wake, so confirmation comes from retry readback.
+        assert engine.rooms.pending["climate.trv_b"] is pending
+        await advance(hass, freezer, 10)
     assert "climate.trv_b" not in engine.rooms.pending
     assert not engine.store.data.overrides and not engine.rooms.problems
     await engine.async_stop(unloading=False)
@@ -755,4 +760,102 @@ async def test_knob_equal_to_schedule_without_override_does_not_save_store(hass,
         await hass.async_block_till_done()
         save.assert_not_awaited()
     assert not engine.store.data.overrides
+    await engine.async_stop(unloading=False)
+
+
+async def test_attribute_only_report_cannot_confirm_optimistic_target(hass, freezer):
+    """R03: a room-temperature update must not release the stale setpoint guard."""
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    sleepy = SleepyTRV(hass, "climate.trv_b", optimistic=True)
+    await advance(hass, freezer, 10)
+    pending = engine.rooms.pending["climate.trv_b"]
+    assert sleepy.physical_target == 18
+    assert hass.states.get("climate.trv_b").attributes["temperature"] == 21
+    await sleepy.wake(lose_commands=True)
+    state = hass.states.get("climate.trv_b")
+    hass.states.async_set(
+        "climate.trv_b",
+        state.state,
+        {**state.attributes, "current_temperature": 17.5},
+        context=Context(),
+    )
+    await hass.async_block_till_done()
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    assert pending.commands[0].before == 18
+    await sleepy.stale()
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    assert not engine.store.data.overrides
+    assert hass.states.get("climate.trv_a").attributes["temperature"] == 21
+    await advance(hass, freezer, 10)
+    assert pending.retries == 1
+    assert len(sleepy.queue) == 1
+    await sleepy.wake()
+    assert sleepy.physical_target == 21
+    assert engine.rooms.pending["climate.trv_b"] is pending
+    await advance(hass, freezer, 10)
+    assert "climate.trv_b" not in engine.rooms.pending
+    assert not engine.store.data.overrides
+    await engine.async_stop(unloading=False)
+
+
+async def test_stale_off_after_optimistic_heat_restore_does_not_pause(hass, freezer):
+    """R09: losing a queued heat restore still leads to a retry after stale off."""
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    report(hass, "climate.trv_a", 21, mode="off")
+    await hass.async_block_till_done()
+    sleepy = SleepyTRV(hass, "climate.trv_a", optimistic=True)
+    await engine.async_data_changed()
+    await hass.async_block_till_done()
+    pending = engine.rooms.pending["climate.trv_a"]
+    assert hass.states.get("climate.trv_a").state == "heat"
+    assert sleepy.physical_mode == "off"
+    assert pending.commands[0].before_mode == "off"
+    await sleepy.wake(lose_commands=True)
+    await sleepy.stale()
+    assert hass.states.get("climate.trv_a").state == "off"
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    assert pending.cancel is not None
+    assert not engine.store.data.overrides
+    await advance(hass, freezer, 10)
+    assert pending.retries == 1
+    assert sleepy.queue[0].data["hvac_mode"] == "heat"
+    await sleepy.wake()
+    assert sleepy.physical_mode == "heat"
+    # Real and optimistic state are identical; HA emits no state change to confirm it.
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    await advance(hass, freezer, 10)
+    assert "climate.trv_a" not in engine.rooms.pending
+    assert not engine.rooms.problems
+    await engine.async_stop(unloading=False)
+
+
+async def test_partial_confirmation_updates_observed_for_next_retry(hass, freezer):
+    """P14: retry must accept an older confirmed command as its new baseline."""
+    from tests.integration.sleepy_trv import SleepyTRV
+
+    engine, room, calls = await build_rooms(hass, freezer)
+    await advance(hass, freezer, 10)
+    sleepy = SleepyTRV(hass, "climate.trv_a")
+    for target in (22, 23):
+        await engine.rooms.async_set_override(room.id, target, source="card")
+        await engine.async_recalculate(apply_rooms=True)
+        await hass.async_block_till_done()
+    pending = engine.rooms.pending["climate.trv_a"]
+    assert pending.observed == 21
+    assert [command.target for command in pending.commands] == [22, 23]
+    await sleepy.wake(count=1)
+    assert pending.observed == 22
+    assert [command.target for command in pending.commands] == [23]
+    before = len(sleepy.sent)
+    await advance(hass, freezer, 10)
+    assert engine.rooms.pending["climate.trv_a"] is pending
+    assert pending.retries == 1
+    assert len(sleepy.sent) == before + 1
+    assert sleepy.sent[-1].data["temperature"] == 23
+    assert engine.store.data.overrides[0].target == 23
     await engine.async_stop(unloading=False)

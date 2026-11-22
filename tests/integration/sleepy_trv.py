@@ -31,7 +31,6 @@ class SleepyTRV:
             self.physical_mode if mode is None else mode,
             {**state.attributes, "temperature": target},
             context=context or Context(),
-            force_update=True,
         )
 
     async def handle(self, call):
