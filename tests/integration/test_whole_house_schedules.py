@@ -1,6 +1,7 @@
 """Whole-house scheduling controls on invented rooms and thermostats only."""
 
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import Context
@@ -55,14 +56,18 @@ async def test_active_edits_apply_only_affected_rooms_and_inactive_edits_do_not_
     await command(client, entry, "mode/set", mode="schedule")
     await hass.async_block_till_done()
     calls.clear()
-    saved = await command(
-        client,
-        entry,
-        "schedule/save",
-        schedule={"id": "winter", "name": "Winter", "rooms": {a: {"days": days(22)}}},
-    )
-    assert saved["success"]
-    await hass.async_block_till_done()
+    with patch.object(
+        entry.runtime_data.rooms, "async_apply", wraps=entry.runtime_data.rooms.async_apply
+    ) as apply:
+        saved = await command(
+            client,
+            entry,
+            "schedule/save",
+            schedule={"id": "winter", "name": "Winter", "rooms": {a: {"days": days(22)}}},
+        )
+        assert saved["success"]
+        await hass.async_block_till_done()
+        apply.assert_awaited_once_with(force=False, room_ids={a})
     assert calls and {call["entity_id"] for call in calls} == {"climate.trv_a"}
     calls.clear()
     other = (
@@ -276,3 +281,68 @@ async def test_away_until_returns_to_schedule(hass, client, entry, freezer):
     freezer.tick(timedelta(minutes=5))
     await entry.runtime_data.async_recalculate(apply_rooms=True)
     assert entry.runtime_data.store.data.mode.value == "schedule"
+
+
+async def test_select_maps_exact_names_to_ids_and_conflicting_name_is_rejected(hass, client, entry):
+    assert (
+        await command(client, entry, "schedule/save", schedule={"id": "winter", "name": "Cold"})
+    )["success"]
+    before = entry.runtime_data.store.data
+    conflict = await command(client, entry, "schedule/save", schedule={"name": "winter"})
+    assert not conflict["success"]
+    assert "another schedule's id" in conflict["error"]["message"]
+    assert entry.runtime_data.store.data is before
+    key = (await command(client, entry, "schedule/save", schedule={"name": "Autumn"}))["result"][
+        "saved_id"
+    ]
+    select = ActiveScheduleSelect(entry, "active_schedule")
+    with patch.object(entry.runtime_data, "async_set_schedule", new_callable=AsyncMock) as activate:
+        await select.async_select_option("Autumn")
+        activate.assert_awaited_once_with(key)
+    await select.async_select_option("Autumn")
+    assert entry.runtime_data.store.data.active_schedule_id == key
+    assert select.current_option == "Autumn"
+
+
+async def test_room_update_cannot_copy_weeks_and_is_atomic(client, entry):
+    before = entry.runtime_data.store.data
+    room = before.rooms[0]
+    result = await command(
+        client,
+        entry,
+        "room/save",
+        room={
+            "id": room.id,
+            "name": "Changed",
+            "trvs": list(room.trvs),
+            "copy_week_from_room": room.id,
+        },
+    )
+    assert not result["success"]
+    assert "only supported when creating" in result["error"]["message"]
+    assert entry.runtime_data.store.data is before
+
+
+@pytest.mark.parametrize("mode", ["away", "off", "manual", "summer"])
+async def test_schedule_id_outside_schedule_mode_is_rejected_atomically(client, entry, mode):
+    before = entry.runtime_data.store.data
+    result = await command(client, entry, "mode/set", mode=mode, schedule_id="winter")
+    assert not result["success"]
+    assert entry.runtime_data.store.data is before
+
+
+async def test_room_schedule_attribute_follows_switch(hass, client, entry):
+    room = entry.runtime_data.store.data.rooms[0]
+    from homeassistant.helpers import entity_registry as er
+
+    entity = er.async_get(hass).async_get_entity_id(
+        "climate", DOMAIN, f"{entry.entry_id}_room_{room.id}"
+    )
+    assert hass.states.get(entity).attributes["schedule"] == "Winter"
+    key = (await command(client, entry, "schedule/save", schedule={"name": "Autumn"}))["result"][
+        "saved_id"
+    ]
+    assert (await command(client, entry, "schedule/activate", schedule_id=key))["success"]
+    await hass.async_block_till_done()
+    assert hass.states.get(entity).attributes["schedule"] == "Autumn"
+    assert "profile" not in hass.states.get(entity).attributes

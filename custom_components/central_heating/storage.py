@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
@@ -15,6 +16,8 @@ from .schedule import Block, Day, Room, Week, new_id, validate_week
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
 
 STORE_MINOR = 4
 MODES = ("schedule", "away", "off", "manual")
@@ -163,6 +166,12 @@ def validate_data(data: HeatingData) -> None:
             or not schedule.name.strip()
         ):
             raise ValueError("Schedule names must be non-empty")
+        if any(
+            schedule.name.strip().casefold() == other.id.casefold()
+            for other in data.schedules
+            if other.id != schedule.id
+        ):
+            raise ValueError("Schedule name cannot equal another schedule's id")
         names.append(schedule.name.strip().casefold())
         if (
             len(schedule.rooms) != len(room_ids)
@@ -335,9 +344,45 @@ class HeatingStore:
                     raise ValueError("Unsupported heating Store version")
                 from .migration import migrate_store
 
-                return to_json(from_json(migrate_store(raw)))
+                migrated = to_json(from_json(migrate_store(raw)))
+                if "schedules" not in raw:
+                    from homeassistant.util.file import WriteError, write_utf8_file_atomic
 
-        self._store = VersionedStore(hass, 1, f"{DOMAIN}.{entry_id}", minor_version=STORE_MINOR)
+                    def backup():
+                        path = Path(self.path)
+                        original = path.read_bytes()
+                        if json.loads(original)["data"] != raw:
+                            raise ValueError("Store changed before migration backup")
+                        destination = path.with_name(path.name + ".pre_schedules")
+                        if destination.exists():
+                            if destination.read_bytes() != original:
+                                raise ValueError("A different pre-schedules backup already exists")
+                            return
+                        write_utf8_file_atomic(str(destination), original, private=True, mode="wb")
+
+                    try:
+                        await hass.async_add_executor_job(backup)
+                    except (OSError, ValueError, WriteError) as exc:
+                        raise ValueError(
+                            "Cannot back up original heating Store; schedules migration stopped"
+                        ) from exc
+                    used = {room.get("profile_id") for room in raw.get("rooms", {}).values()}
+                    dropped = [
+                        f"{profile['name']} ({key})"
+                        for key, profile in raw.get("profiles", {}).items()
+                        if key not in used
+                    ]
+                    if dropped:
+                        _LOGGER.warning(
+                            "Unused profiles omitted from schedules: %s. Originals retained in %s.pre_schedules",
+                            ", ".join(dropped),
+                            self.path,
+                        )
+                return migrated
+
+        self._store = VersionedStore(
+            hass, 1, f"{DOMAIN}.{entry_id}", minor_version=STORE_MINOR, atomic_writes=True
+        )
         self._lock = asyncio.Lock()
         self.data = HeatingData()
 

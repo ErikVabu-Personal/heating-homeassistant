@@ -453,6 +453,19 @@ committed bundle is up to date.
 
 ## 12. Migration and staged go-live
 
+Before the legacy Store is rewritten, its original file bytes (the full HA envelope, names and unused
+profiles included) are saved unchanged to the sibling `.storage/central_heating.<entry_id>.pre_schedules`.
+HA's atomic write helper runs in an executor job with private permissions and fsync. Validation happens
+first; backup failure aborts migration before Store save. A differing existing backup is never overwritten.
+Unused profiles are warned by name and id. The new Store also enables `atomic_writes=True`.
+
+Rollback: stop HA, install the previous integration version and restore each entry's `.pre_schedules`
+backup over its original Store file before starting HA. Alternatively restore a complete pre-upgrade
+HA backup. Downgrade alone cannot read the new Store; restoring discards post-upgrade changes.
+Schedule names may not equal another schedule's id; the active-schedule select maps exact option names
+to ids, avoiding ambiguous selection.
+
+
 Minor version 4 upgrades older version-1 Stores automatically on the next integration load. Existing room IDs,
 physical thermostats, settings, mode intent, shadow and overrides are preserved. One active Winter contains each
 room's previous weekly targets, copied independently from its old profile. auto/summer become schedule/off;

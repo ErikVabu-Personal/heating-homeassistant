@@ -425,7 +425,7 @@ async def test_entry_actions_ids_options_and_real_unload(hass, mqtt_mock):
     assert messages(mqtt_mock) == [("boiler_b/properties/mode", "off", 0, False)]
 
 
-async def test_store_minor_migration_and_entry_removal(hass, hass_storage):
+async def test_store_minor_migration_and_entry_removal(hass, hass_storage, tmp_path):
     from custom_components.central_heating import async_remove_entry
 
     entry = MockConfigEntry(domain=DOMAIN, data={})
@@ -435,6 +435,16 @@ async def test_store_minor_migration_and_entry_removal(hass, hass_storage):
         "key": f"{DOMAIN}.{entry.entry_id}",
         "data": {"settings": {"frost_temperature": 8}},
     }
+    import json
+
+    hass.config.config_dir = str(tmp_path)
+    path = tmp_path / ".storage" / f"{DOMAIN}.{entry.entry_id}"
+
+    def write_original():
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(hass_storage[f"{DOMAIN}.{entry.entry_id}"]))
+
+    await hass.async_add_executor_job(write_original)
     store = HeatingStore(hass, entry.entry_id)
     await store.async_load()
     assert store.data.shadow and store.data.settings.frost_temperature == 8

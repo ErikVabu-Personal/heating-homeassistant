@@ -35,4 +35,9 @@ class ActiveScheduleSelect(HeatingEntity, SelectEntity):
         )
 
     async def async_select_option(self, option: str) -> None:
-        await self.engine.async_set_schedule(option)
+        schedule_id = next(
+            (item.id for item in self.engine.store.data.schedules if item.name == option), None
+        )
+        if schedule_id is None:
+            raise ValueError("Unknown schedule option")
+        await self.engine.async_set_schedule(schedule_id)

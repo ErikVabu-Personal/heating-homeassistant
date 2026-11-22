@@ -91,9 +91,25 @@ then configure room weeks, activate a schedule, disable those old schedules and 
 default and pauses boiler commands with one click; manual mode pauses room schedule writes too.
 Comparing with a previous setup is optional.
 
-### Existing installations
+### Upgrading
 
 Store minor version 4 turns the previous profiles into one active **Winter** schedule. Every room keeps a copy
 of its previous week, its thermostat assignments, settings and overrides (including expiry kind). Existing Manual
 and shadow settings stay as they are. The new **Active schedule** select and `central_heating.set_schedule`
 service choose a plan by name or id.
+
+The mode select now offers `schedule`/`away`/`off`/`manual`. Update automations using
+`select.select_option`: `auto` and `summer` no longer work as select options. The services and API
+still accept those aliases. Room climate attributes now expose `schedule` instead of `profile`.
+Schedule names cannot equal another schedule's id, preventing ambiguous service/API lookups.
+
+Before replacing a legacy Store, migration atomically saves its original bytes (including unused profiles
+and profile names) to `.storage/central_heating.<entry_id>.pre_schedules`. Unused profiles are listed by
+name and id in a warning. If this backup cannot be written, migration stops and leaves the original alone.
+The migrated Store uses atomic, fsynced writes too. Keep the backup until the upgrade is accepted.
+
+To roll back, stop Home Assistant, install the previous integration version, and restore the matching
+`.pre_schedules` file over `.storage/central_heating.<entry_id>` before starting Home Assistant.
+Restore every affected entry's file; changes made after migration will be lost on rollback. Alternatively,
+restore a complete pre-upgrade Home Assistant backup. Installing an older version alone cannot read the
+new schedule Store.
